@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+dist
+build
+coverage
+public
+*.min.js
+*.min.css
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.env*
+artifacts
+cache
+typechain-types
+ignition/deployments

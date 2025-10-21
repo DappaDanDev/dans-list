@@ -1,0 +1,269 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum ListingStatus {
+  AVAILABLE
+  PENDING
+  SOLD
+  CANCELLED
+  DISPUTED
+}
+
+enum AgentType {
+  BUYER
+  SELLER
+  MARKETPLACE
+  ARBITRATOR
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REVERTED
+}
+
+enum ProofType {
+  AI_ANALYSIS
+  AGENT_DECISION
+  PURCHASE
+  DISPUTE
+  DELIVERY
+}
+
+// ==================== MODELS ====================
+
+model Listing {
+  id               String         @id @default(cuid())
+  title            String
+  description      String         @db.Text
+  imageUrl         String
+  price            Decimal        @db.Decimal(20, 6)
+  category         String
+  condition        String
+  features         Json
+  searchTags       String[]
+
+  // AI Analysis
+  aiProofHash      String?
+
+  // Agent relationships
+  sellerAgentId    String
+  buyerAgentId     String?
+
+  // Blockchain data
+  contractAddress  String?
+  chainId          Int?
+
+  // Status
+  status           ListingStatus  @default(AVAILABLE)
+  soldAt           DateTime?
+
+  // Metadata
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  // Relations
+  sellerAgent      Agent          @relation("seller", fields: [sellerAgentId], references: [id])
+  buyerAgent       Agent?         @relation("buyer", fields: [buyerAgentId], references: [id])
+  transactions     Transaction[]
+  proofs           Proof[]
+
+  @@index([status, category])
+  @@index([sellerAgentId])
+  @@index([price])
+  // Note: For searchTags array, use GIN index via raw SQL migration:
+  // CREATE INDEX "Listing_searchTags_idx" ON "Listing" USING GIN ("searchTags");
+}
+
+model Agent {
+  id               String         @id @default(cuid())
+  type             AgentType
+  walletAddress    String         @unique
+  vincentPkpId     String?
+  eigenAvsId       String?
+
+  // Policies
+  policies         Json
+  spendingLimit    Decimal        @db.Decimal(20, 6)
+  dailyLimit       Decimal        @db.Decimal(20, 6)
+
+  // Performance metrics
+  totalTransactions Int           @default(0)
+  successRate      Float         @default(100)
+  totalVolume      Decimal       @default(0) @db.Decimal(20, 6)
+  lastActivity     DateTime?
+
+  // Relations
+  listings         Listing[]      @relation("seller")
+  purchases        Listing[]      @relation("buyer")
+  sentTransactions Transaction[]  @relation("fromAgent")
+  receivedTransactions Transaction[] @relation("toAgent")
+  messages         Message[]
+  proofs           Proof[]
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([type, walletAddress])
+  @@index([lastActivity])
+}
+
+model Transaction {
+  id               String         @id @default(cuid())
+  hash             String         @unique
+
+  // Participants
+  fromAgentId      String
+  toAgentId        String
+  listingId        String
+
+  // Payment details
+  amount           Decimal        @db.Decimal(20, 6)
+  token            String         @default("PYUSD")
+  sourceChain      Int
+  destinationChain Int
+
+  // Nexus routing (for cross-chain)
+  nexusRouteId     String?
+  nexusSteps       Json?
+  bridgeFee        Decimal?       @db.Decimal(20, 6)
+  swapFee          Decimal?       @db.Decimal(20, 6)
+
+  // Status
+  status           TransactionStatus
+  blockNumber      BigInt?
+  gasUsed          BigInt?
+  errorMessage     String?
+
+  // Relations
+  fromAgent        Agent          @relation("fromAgent", fields: [fromAgentId], references: [id])
+  toAgent          Agent          @relation("toAgent", fields: [toAgentId], references: [id])
+  listing          Listing        @relation(fields: [listingId], references: [id])
+  proofs           Proof[]
+
+  createdAt        DateTime       @default(now())
+  confirmedAt      DateTime?
+
+  @@index([status, fromAgentId])
+  @@index([status, toAgentId])
+  @@index([hash])
+  @@index([listingId])
+}
+
+model Proof {
+  id               String         @id @default(cuid())
+  type             ProofType
+  hash             String         @unique
+
+  // Associated entities
+  listingId        String?
+  transactionId    String?
+  agentId          String?
+
+  // Proof data
+  data             Json
+  signature        String?
+
+  // EigenLayer attestation
+  eigenAttestationId String?
+  eigenDaHash      String?
+
+  // Verification
+  verified         Boolean        @default(false)
+  verifiedAt       DateTime?
+  verifierAddress  String?
+
+  // Relations
+  listing          Listing?       @relation(fields: [listingId], references: [id])
+  transaction      Transaction?   @relation(fields: [transactionId], references: [id])
+  agent            Agent?         @relation(fields: [agentId], references: [id])
+
+  createdAt        DateTime       @default(now())
+
+  @@index([type])
+  @@index([hash])
+  @@index([listingId])
+  @@index([transactionId])
+}
+
+model Message {
+  id               String         @id @default(cuid())
+
+  // A2A Protocol message
+  jsonrpcId        String
+  method           String
+  params           Json
+
+  // Sender
+  fromAgentId      String
+
+  // Response
+  result           Json?
+  error            Json?
+
+  // Relations
+  fromAgent        Agent          @relation(fields: [fromAgentId], references: [id])
+
+  createdAt        DateTime       @default(now())
+
+  @@index([fromAgentId])
+  @@index([method])
+}
+
+model MarketMetrics {
+  id               String         @id @default("global")
+
+  // Aggregate metrics
+  totalAgents      Int            @default(0)
+  activeAgents24h  Int            @default(0)
+  totalListings    Int            @default(0)
+  totalVolume24h   Decimal        @default(0) @db.Decimal(20, 6)
+  totalVolume7d    Decimal        @default(0) @db.Decimal(20, 6)
+  totalVolume30d   Decimal        @default(0) @db.Decimal(20, 6)
+  averageListingPrice Decimal     @default(0) @db.Decimal(20, 6)
+  topCategory      String?
+
+  // Chain breakdown
+  chainMetrics     Json           @default("{}")
+
+  updatedAt        DateTime       @updatedAt
+}
+
+model EventLog {
+  id               String         @id @default(cuid())
+
+  // Event details
+  eventType        String
+  eventName        String
+  blockNumber      BigInt
+  transactionHash  String
+  chainId          Int
+  contractAddress  String
+
+  // Event data
+  data             Json
+  topics           String[]
+
+  // Processing
+  processed        Boolean        @default(false)
+  processedAt      DateTime?
+
+  createdAt        DateTime       @default(now())
+
+  @@index([eventType, processed])
+  @@index([transactionHash])
+  @@index([blockNumber, chainId])
+}
