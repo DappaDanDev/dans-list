@@ -1,0 +1,20 @@
+name: DansListMarketplace
+description: AI Agent Marketplace Activity Tracker
+networks:
+  - id: 421614  # Arbitrum Sepolia
+    start_block: 0
+    contracts:
+      - name: VerifiableMarketplace
+        abi_file_path: ../artifacts/contracts/VerifiableMarketplace.sol/VerifiableMarketplace.json
+        address: ${MARKETPLACE_ADDRESS}  # Injected dynamically via sync script
+        handler: ./src/EventHandlers.ts
+        events:
+          - event: ListingCreated
+          - event: PurchaseInitiated
+          - event: AgentRegistered
+
+# GraphQL schema location
+schema_path: ./schema.graphql
+
+# Event handlers location
+handler_path: ./src/EventHandlers.ts

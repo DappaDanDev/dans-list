@@ -1,0 +1,15 @@
+{
+  "chainId": 421614,
+  "blockNumber": 12345670,
+  "blockTimestamp": 1699999900,
+  "transactionHash": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+  "logIndex": 0,
+  "event": {
+    "name": "AgentRegistered",
+    "params": {
+      "agentId": "agent_seller_001",
+      "walletAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+      "timestamp": 1699999900
+    }
+  }
+}

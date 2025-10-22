@@ -46,7 +46,7 @@ async function syncEnvioConfig() {
 
     // Read ABI files
     const marketplaceAbiPath = path.join(__dirname, '../artifacts/contracts/VerifiableMarketplace.sol/VerifiableMarketplace.json');
-    let marketplaceAbiFile = './abis/VerifiableMarketplace.json';
+    const marketplaceAbiFile = './abis/VerifiableMarketplace.json';
 
     if (fs.existsSync(marketplaceAbiPath)) {
       // Copy ABI to envio directory
@@ -69,8 +69,8 @@ async function syncEnvioConfig() {
     }
 
     // Generate Envio config
-    const envioConfig = `name: DansList
-description: AI-powered marketplace activity tracker
+    const envioConfig = `name: DansListMarketplace
+description: AI Agent Marketplace Activity Tracker
 networks:
   - id: 31337  # Local Hardhat
     start_block: 0
@@ -81,9 +81,8 @@ networks:
         handler: ./src/EventHandlers.ts
         events:
           - event: ListingCreated
-          - event: ListingPurchased
-          - event: MarketplaceFeeUpdated
-          - event: FundsWithdrawn
+          - event: PurchaseInitiated
+          - event: AgentRegistered
   - id: 421614  # Arbitrum Sepolia
     start_block: 0
     contracts:
@@ -93,8 +92,14 @@ networks:
         handler: ./src/EventHandlers.ts
         events:
           - event: ListingCreated
-          - event: ListingPurchased
-          - event: MarketplaceFeeUpdated
+          - event: PurchaseInitiated
+          - event: AgentRegistered
+
+# GraphQL schema location
+schema_path: ./schema.graphql
+
+# Event handlers location
+handler_path: ./src/EventHandlers.ts
 `;
 
     // Write config file
@@ -102,48 +107,61 @@ networks:
     fs.writeFileSync(configPath, envioConfig);
     logger.info({ path: configPath }, 'Generated Envio configuration');
 
-    // Generate GraphQL schema
+    // Generate GraphQL schema (no aiProofHash references)
     const graphqlSchema = `type Agent @entity {
   id: ID!
   walletAddress: String!
-  totalListings: BigInt!
-  totalPurchases: BigInt!
+  totalListings: Int!
+  totalPurchases: Int!
   totalVolume: BigInt!
   lastActivity: BigInt!
+  chainId: Int!
   createdAt: BigInt!
-}
-
-type Listing @entity {
-  id: ID!
-  listingId: String! @index
-  seller: Agent!
-  price: BigInt!
-  sold: Boolean!
-  aiProofHash: Bytes!
-  buyer: Agent
-  createdAt: BigInt!
-  soldAt: BigInt
-}
-
-type Transaction @entity {
-  id: ID!
-  hash: String! @index
-  from: Agent!
-  to: Agent!
-  listing: Listing!
-  amount: BigInt!
-  timestamp: BigInt!
-  blockNumber: BigInt!
 }
 
 type MarketMetrics @entity {
   id: ID!
-  totalListings: BigInt!
+  totalListings: Int!
   totalVolume: BigInt!
-  totalAgents: BigInt!
-  activeAgents24h: BigInt!
+  activeAgents24h: Int!
   averagePrice: BigInt!
-  updatedAt: BigInt!
+  totalTransactions: Int!
+  lastUpdated: BigInt!
+}
+
+type ListingEvent @entity {
+  id: ID!
+  listingId: String!
+  type: String!
+  agentId: String!
+  seller: String!
+  price: BigInt!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+type PurchaseEvent @entity {
+  id: ID!
+  listingId: String!
+  buyer: String!
+  seller: String!
+  amount: BigInt!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+type AgentRegistration @entity {
+  id: ID!
+  agentId: String!
+  walletAddress: String!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
 }
 `;
 

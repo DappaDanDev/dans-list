@@ -1,0 +1,22 @@
+# Generated files
+src/generated/
+artifacts/
+cache/
+node_modules/
+.next/
+
+# Build outputs
+dist/
+build/
+out/
+
+# Prisma generated client
+prisma/generated/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment files
+.env*
+!.env.example

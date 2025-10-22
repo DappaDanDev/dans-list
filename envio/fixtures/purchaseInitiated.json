@@ -1,0 +1,17 @@
+{
+  "chainId": 421614,
+  "blockNumber": 12345680,
+  "blockTimestamp": 1700000100,
+  "transactionHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "logIndex": 1,
+  "event": {
+    "name": "PurchaseInitiated",
+    "params": {
+      "listingId": "listing_001",
+      "buyer": "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199",
+      "seller": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+      "amount": "150000000000000000000",
+      "timestamp": 1700000100
+    }
+  }
+}

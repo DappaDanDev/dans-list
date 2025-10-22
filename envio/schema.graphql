@@ -1,0 +1,73 @@
+# Envio GraphQL Schema for Dans List Marketplace
+# Market Activity Dashboard - Agent Performance and Transaction Tracking
+
+"""
+Agent entity tracks individual agents (buyers/sellers) and their performance metrics
+"""
+type Agent @entity {
+  id: ID!
+  walletAddress: String!
+  totalListings: Int!
+  totalPurchases: Int!
+  totalVolume: BigInt!
+  lastActivity: BigInt!
+  chainId: Int!
+  createdAt: BigInt!
+}
+
+"""
+MarketMetrics entity tracks global marketplace statistics
+"""
+type MarketMetrics @entity {
+  id: ID!
+  totalListings: Int!
+  totalVolume: BigInt!
+  activeAgents24h: Int!
+  averagePrice: BigInt!
+  totalTransactions: Int!
+  lastUpdated: BigInt!
+}
+
+"""
+ListingEvent entity tracks all listing-related events
+"""
+type ListingEvent @entity {
+  id: ID!
+  listingId: String!
+  type: String!
+  agentId: String!
+  seller: String!
+  price: BigInt!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+"""
+PurchaseEvent entity tracks all purchase-related events
+"""
+type PurchaseEvent @entity {
+  id: ID!
+  listingId: String!
+  buyer: String!
+  seller: String!
+  amount: BigInt!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+"""
+AgentRegistration entity tracks when agents are registered
+"""
+type AgentRegistration @entity {
+  id: ID!
+  agentId: String!
+  walletAddress: String!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
