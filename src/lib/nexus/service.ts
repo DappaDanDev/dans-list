@@ -1,12 +1,20 @@
 /**
  * NexusService - Avail Nexus cross-chain payment integration
- * Handles payment routing across chains using Nexus SDK
+ * Real SDK implementation with Vincent Ability Provider
  */
 
-import { NexusClient } from '@nexus-sdk/client';
-import { VincentProvider, createVincentProvider } from '@/lib/vincent/provider';
+import { NexusSDK } from '@avail-project/nexus';
+import type {
+  TransferParams,
+  TransferResult,
+  OnIntentHookData,
+  OnAllowanceHookData,
+  NEXUS_EVENTS,
+} from '@avail-project/nexus';
+import { VincentProviderAbility } from '@/lib/vincent/provider-ability';
+import { VincentWalletAbilityService } from '@/lib/vincent/wallet-ability.service';
 import { loggers } from '@/lib/utils/logger';
-import { ethers } from 'ethers';
+import type { EIP1193Provider } from 'viem';
 
 const logger = loggers.nexus;
 
@@ -16,9 +24,8 @@ const logger = loggers.nexus;
 export interface NexusTransactionParams {
   fromAgentId: string;
   toAddress: string;
-  amount: string; // Amount in wei
-  token: string; // Token symbol (e.g., 'PYUSD', 'ETH')
-  sourceChainId: number;
+  amount: string; // Human-readable amount (e.g., "100" for 100 USDC)
+  token: 'USDC' | 'USDT' | 'ETH'; // Nexus supported tokens
   destinationChainId: number;
 }
 
@@ -26,14 +33,10 @@ export interface NexusTransactionParams {
  * Transaction result from Nexus
  */
 export interface NexusTransactionResult {
-  transactionHash: string;
-  status: 'PENDING' | 'CONFIRMED' | 'FAILED';
-  nexusId?: string; // Nexus internal tracking ID
-  bridgeInfo?: {
-    sourceChain: number;
-    destinationChain: number;
-    estimatedTime: number; // seconds
-  };
+  transactionHash?: string;
+  status: 'SUCCESS' | 'FAILED';
+  explorerUrl?: string;
+  error?: string;
 }
 
 /**
@@ -41,239 +44,327 @@ export interface NexusTransactionResult {
  */
 interface NexusConfig {
   network: 'mainnet' | 'testnet';
-  webhookUrl?: string;
 }
 
 /**
  * NexusService handles cross-chain payments via Avail Nexus
+ *
+ * CRITICAL ARCHITECTURE:
+ * - Uses Vincent PKP wallet via VincentProviderAbility
+ * - Autonomous agent approval via hooks (no user prompts)
+ * - Event-driven progress tracking
+ * - Integrates with VincentWalletAbilityService for wallet addresses
  */
 export class NexusService {
   private config: NexusConfig;
-  private clientCache = new Map<string, NexusClient>();
+  private sdkCache = new Map<string, NexusSDK>();
+  private walletService: VincentWalletAbilityService;
 
   constructor(config?: Partial<NexusConfig>) {
     this.config = {
       network: (process.env.NEXUS_NETWORK as 'mainnet' | 'testnet') || 'testnet',
-      webhookUrl: process.env.NEXUS_WEBHOOK_URL,
       ...config,
     };
 
+    this.walletService = new VincentWalletAbilityService();
+
     logger.info({
       network: this.config.network,
-      webhookConfigured: !!this.config.webhookUrl
-    }, 'NexusService initialized');
+    }, 'NexusService initialized with real SDK');
   }
 
   /**
-   * Get or create Nexus client for an agent
-   * Caches clients to avoid re-initialization
+   * Get or create Nexus SDK instance for an agent
+   * Initializes with Vincent provider and sets up hooks
    */
-  private async getClient(agentId: string): Promise<NexusClient> {
+  private async getSDK(agentId: string): Promise<NexusSDK> {
     // Check cache first
-    if (this.clientCache.has(agentId)) {
-      return this.clientCache.get(agentId)!;
+    if (this.sdkCache.has(agentId)) {
+      logger.debug({ agentId }, 'Using cached Nexus SDK');
+      return this.sdkCache.get(agentId)!;
     }
 
     try {
-      logger.debug({ agentId }, 'Creating Nexus client');
+      logger.info({ agentId }, 'Creating new Nexus SDK instance');
 
-      // Create Vincent provider for the agent
-      const provider = createVincentProvider(agentId);
+      // Step 1: Get PKP wallet address for agent
+      const walletAddress = await this.walletService.getWalletAddress(agentId);
 
-      // Initialize Nexus client with Vincent provider
-      const client = new NexusClient({
-        provider: provider as any, // Cast to satisfy Nexus SDK type requirements
-        network: this.config.network,
+      logger.debug({ agentId, walletAddress }, 'Got wallet address from VincentAuth');
+
+      // Step 2: Create Vincent provider for agent's PKP wallet
+      // CRITICAL: This provider uses Vincent Ability SDK to sign transactions
+      const provider = new VincentProviderAbility({
+        walletAddress,
+        chainId: 11155111, // Default to Ethereum Sepolia
       });
 
-      // Cache the client
-      this.clientCache.set(agentId, client);
+      logger.debug({ agentId }, 'Created VincentProviderAbility');
 
-      logger.info({ agentId }, 'Nexus client created and cached');
+      // Step 3: Create Nexus SDK instance
+      const nexusSdk = new NexusSDK({
+        network: this.config.network,
+        debug: process.env.NODE_ENV === 'development',
+      });
 
-      return client;
+      logger.debug({ agentId, network: this.config.network }, 'Created Nexus SDK instance');
+
+      // Step 4: Initialize SDK with Vincent provider
+      await nexusSdk.initialize(provider as unknown as EIP1193Provider);
+
+      logger.info({ agentId }, 'Nexus SDK initialized with Vincent provider');
+
+      // Step 5: Set up autonomous approval hooks
+      this.setupHooks(nexusSdk, agentId);
+
+      // Step 6: Set up event listeners
+      this.setupEventListeners(nexusSdk, agentId);
+
+      // Cache the SDK
+      this.sdkCache.set(agentId, nexusSdk);
+
+      logger.info({ agentId }, 'Nexus SDK ready and cached');
+
+      return nexusSdk;
     } catch (error) {
-      logger.error({ err: error, agentId }, 'Failed to create Nexus client');
-      throw new Error(`Failed to initialize Nexus client: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      logger.error({ err: error, agentId }, 'Failed to create Nexus SDK');
+      throw new Error(`Failed to initialize Nexus SDK: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
   /**
-   * Execute a cross-chain transaction with retry logic
-   * Retries up to 3 times with exponential backoff
+   * Set up autonomous approval hooks for agent
+   *
+   * CRITICAL: Agents auto-approve all intents and allowances
+   * This enables autonomous operation without user prompts
    */
-  async executeTransaction(
+  private setupHooks(sdk: NexusSDK, agentId: string): void {
+    logger.debug({ agentId }, 'Setting up autonomous approval hooks');
+
+    // Intent hook: Auto-approve all intents
+    sdk.setOnIntentHook((data: OnIntentHookData) => {
+      logger.info({
+        agentId,
+        intent: {
+          id: (data.intent as any).id,
+          status: (data.intent as any).status,
+        },
+      }, 'Auto-approving intent for autonomous agent');
+
+      // CRITICAL: Automatically allow the intent
+      // This enables autonomous agent operation
+      data.allow();
+    });
+
+    // Allowance hook: Auto-approve minimum required allowances
+    sdk.setOnAllowanceHook((data: OnAllowanceHookData) => {
+      logger.info({
+        agentId,
+        sources: data.sources,
+      }, 'Auto-approving token allowance for autonomous agent');
+
+      // CRITICAL: Approve minimum required allowance
+      // Using 'min' to only approve what's needed for this transaction
+      data.allow(['min']);
+    });
+
+    logger.info({ agentId }, 'Autonomous approval hooks configured');
+  }
+
+  /**
+   * Set up event listeners for progress tracking
+   *
+   * Listens to Nexus events for detailed operation tracking
+   */
+  private setupEventListeners(sdk: NexusSDK, agentId: string): void {
+    logger.debug({ agentId }, 'Setting up Nexus event listeners');
+
+    // Step complete event
+    sdk.nexusEvents.on('step_complete', (data: any) => {
+      logger.info({
+        agentId,
+        step: data,
+      }, 'Nexus step completed');
+    });
+
+    // Expected steps event
+    sdk.nexusEvents.on('expected_steps', (data: any) => {
+      logger.info({
+        agentId,
+        steps: data,
+      }, 'Nexus expected steps received');
+    });
+
+    // Bridge execute expected steps
+    sdk.nexusEvents.on('bridge_execute_expected_steps', (data: any) => {
+      logger.info({
+        agentId,
+        steps: data,
+      }, 'Bridge execute expected steps');
+    });
+
+    // Bridge execute completed steps
+    sdk.nexusEvents.on('bridge_execute_completed_steps', (data: any) => {
+      logger.info({
+        agentId,
+        steps: data,
+      }, 'Bridge execute completed steps');
+    });
+
+    logger.debug({ agentId }, 'Event listeners configured');
+  }
+
+  /**
+   * Execute a cross-chain USDC transfer
+   *
+   * Uses Nexus SDK transfer() method for cross-chain transfers
+   * Automatically handles chain abstraction and routing
+   *
+   * @param params - Transfer parameters
+   * @returns Transfer result with status and explorer URL
+   */
+  async executeTransfer(
     params: NexusTransactionParams
   ): Promise<NexusTransactionResult> {
-    const MAX_RETRIES = 3;
-    const BASE_DELAY = 1000; // 1 second
-
     logger.info({
       fromAgentId: params.fromAgentId,
       toAddress: params.toAddress,
       amount: params.amount,
       token: params.token,
-      sourceChain: params.sourceChainId,
-      destChain: params.destinationChainId
-    }, 'Executing Nexus transaction');
+      destChain: params.destinationChainId,
+    }, 'Starting Nexus cross-chain transfer');
 
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        logger.debug({ attempt, maxRetries: MAX_RETRIES }, 'Attempting transaction');
-
-        const result = await this.executeTransactionAttempt(params);
-
-        logger.info({
-          transactionHash: result.transactionHash,
-          nexusId: result.nexusId,
-          attempt
-        }, 'Nexus transaction successful');
-
-        return result;
-      } catch (error) {
-        lastError = error as Error;
-
-        logger.warn({
-          err: error,
-          attempt,
-          maxRetries: MAX_RETRIES,
-          fromAgentId: params.fromAgentId
-        }, 'Nexus transaction attempt failed');
-
-        // Don't retry on final attempt
-        if (attempt === MAX_RETRIES) {
-          break;
-        }
-
-        // Exponential backoff: 1s, 2s, 4s
-        const delay = BASE_DELAY * Math.pow(2, attempt - 1);
-
-        logger.debug({ delay, nextAttempt: attempt + 1 }, 'Retrying transaction');
-
-        await this.sleep(delay);
-      }
-    }
-
-    // All retries exhausted
-    logger.error({
-      err: lastError,
-      fromAgentId: params.fromAgentId,
-      retriesExhausted: true
-    }, 'Nexus transaction failed after all retries');
-
-    throw new Error(
-      `Nexus transaction failed after ${MAX_RETRIES} attempts: ${lastError?.message || 'Unknown error'}`
-    );
-  }
-
-  /**
-   * Single transaction attempt (no retries)
-   */
-  private async executeTransactionAttempt(
-    params: NexusTransactionParams
-  ): Promise<NexusTransactionResult> {
     try {
-      // Get Nexus client for the agent
-      const client = await this.getClient(params.fromAgentId);
+      // Step 1: Get Nexus SDK for agent
+      const sdk = await this.getSDK(params.fromAgentId);
 
-      // NOTE: This is a placeholder implementation
-      // Real Nexus SDK API may differ - adjust based on actual SDK documentation
-      const transaction = {
-        to: params.toAddress,
-        amount: params.amount,
+      logger.debug({ agentId: params.fromAgentId }, 'Got Nexus SDK instance');
+
+      // Step 2: Prepare transfer parameters
+      const transferParams: TransferParams = {
         token: params.token,
-        sourceChain: params.sourceChainId,
-        destinationChain: params.destinationChainId,
+        amount: params.amount, // Human-readable amount
+        chainId: params.destinationChainId,
+        recipient: params.toAddress as `0x${string}`,
       };
 
-      // Execute via Nexus SDK
-      // The actual method name and signature will depend on Nexus SDK
-      logger.debug({ transaction }, 'Sending transaction to Nexus');
+      logger.info({
+        agentId: params.fromAgentId,
+        transferParams,
+      }, 'Executing Nexus transfer');
 
-      // Placeholder: Actual Nexus SDK call would be something like:
-      // const response = await client.sendTransaction(transaction);
+      // Step 3: Execute transfer via Nexus SDK
+      // This handles:
+      // - Chain abstraction (auto-routing from any source chain)
+      // - Token approvals (via allowance hook)
+      // - Intent creation and approval (via intent hook)
+      // - Cross-chain bridging if needed
+      const result: TransferResult = await sdk.transfer(transferParams);
 
-      // For now, return a mock successful response
-      // TODO: Replace with actual Nexus SDK call once SDK is available
-      const mockTxHash = '0x' + 'a'.repeat(64);
+      logger.info({
+        agentId: params.fromAgentId,
+        result,
+      }, 'Nexus transfer completed');
 
-      logger.warn('Using mock Nexus transaction - replace with real SDK call');
+      // Step 4: Return standardized result
+      return {
+        status: result.success ? 'SUCCESS' : 'FAILED',
+        explorerUrl: result.explorerUrl,
+        error: result.error,
+      };
+    } catch (error) {
+      logger.error({
+        err: error,
+        agentId: params.fromAgentId,
+      }, 'Nexus transfer failed');
 
       return {
-        transactionHash: mockTxHash,
-        status: 'PENDING',
-        nexusId: `nexus_${Date.now()}`,
-        bridgeInfo: {
-          sourceChain: params.sourceChainId,
-          destinationChain: params.destinationChainId,
-          estimatedTime: 300, // 5 minutes estimate
-        },
+        status: 'FAILED',
+        error: error instanceof Error ? error.message : 'Unknown error',
       };
-    } catch (error) {
-      logger.error({ err: error }, 'Transaction attempt failed');
-      throw error;
     }
   }
 
   /**
-   * Query transaction status from Nexus
+   * Simulate a transfer to estimate costs (optional)
+   *
+   * Uses simulateTransfer to get cost estimates before execution
    */
-  async getTransactionStatus(nexusId: string): Promise<NexusTransactionResult> {
+  async simulateTransfer(
+    params: NexusTransactionParams
+  ): Promise<{
+    estimatedCost?: string;
+    success: boolean;
+    error?: string;
+  }> {
     try {
-      logger.debug({ nexusId }, 'Querying Nexus transaction status');
+      const sdk = await this.getSDK(params.fromAgentId);
 
-      // NOTE: Placeholder implementation
-      // Real implementation would query Nexus API for transaction status
-      // const status = await nexusClient.getTransactionStatus(nexusId);
+      const transferParams: TransferParams = {
+        token: params.token,
+        amount: params.amount,
+        chainId: params.destinationChainId,
+        recipient: params.toAddress as `0x${string}`,
+      };
 
-      logger.warn('Using mock Nexus status query - replace with real SDK call');
+      logger.debug({
+        agentId: params.fromAgentId,
+        transferParams,
+      }, 'Simulating Nexus transfer');
+
+      const simulation = await sdk.simulateTransfer(transferParams);
+
+      logger.info({
+        agentId: params.fromAgentId,
+        simulation,
+      }, 'Transfer simulation completed');
 
       return {
-        transactionHash: '0x' + 'a'.repeat(64),
-        status: 'CONFIRMED',
-        nexusId,
+        success: true,
+        // Add any cost estimation from simulation if available
       };
     } catch (error) {
-      logger.error({ err: error, nexusId }, 'Failed to query transaction status');
-      throw error;
+      logger.error({
+        err: error,
+        agentId: params.fromAgentId,
+      }, 'Transfer simulation failed');
+
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
     }
   }
 
   /**
-   * Estimate cross-chain transaction fees
-   */
-  async estimateFees(params: Pick<NexusTransactionParams, 'sourceChainId' | 'destinationChainId' | 'token'>): Promise<string> {
-    try {
-      logger.debug(params, 'Estimating Nexus fees');
-
-      // NOTE: Placeholder implementation
-      // Real implementation would query Nexus for fee estimation
-      const mockFee = ethers.parseUnits('0.01', 'ether').toString(); // 0.01 ETH
-
-      logger.warn('Using mock Nexus fee estimation - replace with real SDK call');
-
-      return mockFee;
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to estimate fees');
-      throw error;
-    }
-  }
-
-  /**
-   * Clear client cache (useful for testing)
+   * Clear SDK cache (useful for testing)
    */
   clearCache(): void {
-    this.clientCache.clear();
-    logger.debug('Nexus client cache cleared');
+    // Clean up SDK instances
+    for (const [agentId, sdk] of this.sdkCache.entries()) {
+      logger.debug({ agentId }, 'Deinitializing Nexus SDK');
+      sdk.deinit().catch((error) => {
+        logger.warn({ err: error, agentId }, 'Error during SDK deinit');
+      });
+    }
+
+    this.sdkCache.clear();
+    logger.info('Nexus SDK cache cleared');
   }
 
   /**
-   * Sleep utility for retry backoff
+   * Cleanup method
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  async cleanup(): Promise<void> {
+    logger.info('Cleaning up NexusService');
+
+    // Disconnect wallet service
+    await this.walletService.disconnect();
+
+    // Clear SDK cache
+    this.clearCache();
+
+    logger.info('NexusService cleanup complete');
   }
 }
 

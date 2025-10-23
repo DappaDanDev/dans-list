@@ -43,6 +43,42 @@ enum ProofType {
   DELIVERY
 }
 
+// ==================== VINCENT AUTH ====================
+
+/// Stores Vincent JWT authorization data
+/// One user (PKP wallet) can have one agent
+model VincentAuth {
+  id            String   @id @default(cuid())
+
+  /// User ID = PKP wallet address (lowercase)
+  /// Used as unique identifier for auth records
+  userId        String   @unique
+
+  /// PKP wallet address (checksummed)
+  /// The user's Vincent-managed wallet
+  walletAddress String
+
+  /// Decoded JWT data (JSON blob)
+  /// Contains: iss, sub, aud, exp, iat, etc.
+  authData      Json
+
+  /// When auth was stored/refreshed
+  issuedAt      DateTime @default(now())
+
+  /// JWT expiration time
+  /// Extracted from JWT.exp field
+  expiresAt     DateTime
+
+  /// Optional link to Agent
+  /// One Vincent auth = one agent
+  agent         Agent?   @relation(fields: [agentId], references: [id])
+  agentId       String?  @unique
+
+  @@index([walletAddress])
+  @@index([agentId])
+  @@map("vincent_auth")
+}
+
 // ==================== MODELS ====================
 
 model Listing {
@@ -110,6 +146,10 @@ model Agent {
   successRate      Float         @default(100)
   totalVolume      Decimal       @default(0) @db.Decimal(20, 6)
   lastActivity     DateTime?
+
+  // Vincent PKP authentication (optional)
+  /// If present, this agent uses Vincent for transactions
+  vincentAuth      VincentAuth?
 
   // Relations
   listings         Listing[]      @relation("seller")

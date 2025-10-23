@@ -21,6 +21,10 @@
     "@blockscout/app-sdk": "^0.1.2",
     "@envio-dev/hypersync-client": "^0.6.6",
     "@lit-protocol/lit-node-client": "^7.3.1",
+    "@lit-protocol/vincent-ability-erc20-approval": "^3.1.4",
+    "@lit-protocol/vincent-ability-evm-transaction-signer": "^0.1.4",
+    "@lit-protocol/vincent-ability-uniswap-swap": "^8.0.0",
+    "@lit-protocol/vincent-app-sdk": "^2.2.3",
     "@prisma/client": "^6.17.1",
     "ai": "^5.0.76",
     "ethers": "^6.15.0",
@@ -32,6 +36,7 @@
     "prisma": "^6.17.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "viem": "^2.38.3",
     "zod": "^4.1.12"
   },
   "devDependencies": {
