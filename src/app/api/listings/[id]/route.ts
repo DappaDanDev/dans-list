@@ -29,9 +29,13 @@ export async function GET(
           select: {
             id: true,
             walletAddress: true,
-            totalListings: true,
-            totalPurchases: true,
             successRate: true,
+            _count: {
+              select: {
+                listings: true,
+                purchases: true,
+              },
+            },
           },
         },
       },
@@ -57,7 +61,13 @@ export async function GET(
         imageUrl: listing.imageUrl,
         status: listing.status,
         createdAt: listing.createdAt,
-        sellerAgent: listing.sellerAgent,
+        sellerAgent: {
+          id: listing.sellerAgent.id,
+          walletAddress: listing.sellerAgent.walletAddress,
+          successRate: listing.sellerAgent.successRate,
+          totalListings: listing.sellerAgent._count.listings,
+          totalPurchases: listing.sellerAgent._count.purchases,
+        },
       },
       { status: 200 }
     );

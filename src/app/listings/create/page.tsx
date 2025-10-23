@@ -63,19 +63,38 @@ export default function CreateListingPage() {
         try {
           const base64Image = reader.result as string;
 
-          // Call analysis API
+          // Call analysis API using multipart/form-data
+          const formData = new FormData();
+          formData.append('image', base64Image);
+
           const response = await fetch('/api/analyze', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: base64Image }),
+            body: formData,
           });
 
+          const responseBody = await (async () => {
+            const jsonClone = response.clone();
+            try {
+              return await jsonClone.json();
+            } catch {
+              const text = await response.text();
+              try {
+                return JSON.parse(text);
+              } catch {
+                return { error: text };
+              }
+            }
+          })();
+
           if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to analyze image');
+            const message =
+              (responseBody && responseBody.error) ||
+              (typeof responseBody === 'string' ? responseBody : null) ||
+              'Failed to analyze image';
+            throw new Error(message);
           }
 
-          const data = await response.json();
+          const data = responseBody;
           setAnalyzedData(data);
           setEditedData(data);
           setStep('edit');

@@ -1,9 +1,9 @@
 import { generateObject } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { z } from 'zod';
-import { getLogger } from '../utils/logger';
+import { createLogger } from '../utils/logger';
 
-const logger = getLogger('imageAnalysis');
+const logger = createLogger('imageAnalysis');
 
 // Zod schema for listing validation
 const listingSchema = z.object({

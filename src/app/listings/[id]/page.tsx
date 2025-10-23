@@ -5,44 +5,70 @@
  * Integrates AgentPurchasePanel for autonomous purchases
  */
 
-import { notFound } from 'next/navigation';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { AgentPurchasePanel, type ListingItem } from '@/app/components/AgentPurchasePanel';
-
-/**
- * Fetch listing data (server-side)
- */
-async function getListing(id: string) {
-  try {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const response = await fetch(`${baseUrl}/api/listings/${id}`, {
-      cache: 'no-store', // Always fetch fresh data
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Failed to fetch listing:', error);
-    return null;
-  }
-}
+import { LoadingSpinner } from '@/app/components/LoadingSpinner';
 
 /**
  * Listing Detail Page Component
  */
-export default async function ListingDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  const listing = await getListing(id);
+export default function ListingDetailPage() {
+  const params = useParams();
+  const id = params.id as string;
 
-  if (!listing) {
-    notFound();
+  const [listing, setListing] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchListing() {
+      try {
+        const response = await fetch(`/api/listings/${id}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch listing');
+        }
+
+        const data = await response.json();
+        setListing(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load listing');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    fetchListing();
+  }, [id]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8 flex items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error || !listing) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-gray-900 mb-4">Listing Not Found</h1>
+            <p className="text-gray-600 mb-6">{error || 'The listing you are looking for does not exist.'}</p>
+            <Link href="/listings">
+              <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                Back to Listings
+              </button>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // Transform to ListingItem format for AgentPurchasePanel
@@ -123,7 +149,7 @@ export default async function ListingDetailPage({
                   </div>
                 </div>
 
-                {listing.seller && (
+                {listing.sellerAgent && (
                   <div className="pt-4 border-t border-gray-200">
                     <h3 className="text-sm font-semibold text-gray-700 mb-2">
                       Seller Information
@@ -137,19 +163,19 @@ export default async function ListingDetailPage({
                         <div>
                           <p className="text-xs text-gray-500">Listings</p>
                           <p className="text-sm font-semibold text-gray-900">
-                            {listing.seller.totalListings}
+                            {listing.sellerAgent.totalListings}
                           </p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">Purchases</p>
                           <p className="text-sm font-semibold text-gray-900">
-                            {listing.seller.totalPurchases}
+                            {listing.sellerAgent.totalPurchases}
                           </p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">Success Rate</p>
                           <p className="text-sm font-semibold text-green-600">
-                            {listing.seller.successRate}%
+                            {listing.sellerAgent.successRate}%
                           </p>
                         </div>
                       </div>

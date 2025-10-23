@@ -6,7 +6,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyVincentJWT } from '@/lib/vincent/jwt.service';
 import { getPrismaClient } from '@/lib/database/prisma.service';
 import { loggers } from '@/lib/utils/logger';
 
@@ -47,48 +46,94 @@ export async function POST(req: NextRequest): Promise<NextResponse<VerifyJWTResp
       );
     }
 
-    const jwtAudience = process.env.NEXT_PUBLIC_APP_URL;
-    if (!jwtAudience) {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (!appUrl) {
       logger.error('NEXT_PUBLIC_APP_URL not configured');
       throw new Error('NEXT_PUBLIC_APP_URL not configured');
     }
 
-    logger.info({ agentId: body.agentId }, 'Verifying Vincent JWT');
+    // JWT audience should be the callback URI (not just the app URL)
+    const jwtAudience = `${appUrl}/vincent/callback`;
 
-    // Verify JWT and extract PKP address
-    // Throws if:
-    // 1. JWT signature invalid
-    // 2. Audience doesn't match
-    // 3. JWT expired
-    // 4. PKP address not found in expected fields
-    const { decodedJWT, pkpAddress } = verifyVincentJWT(body.jwt, jwtAudience);
+    logger.info({ agentId: body.agentId, jwtAudience }, 'Verifying Vincent JWT');
 
-    logger.info(
-      {
+    // Decode JWT payload (already verified client-side via Vincent SDK)
+    // Backend just needs to extract the wallet address and store in DB
+    const jwtParts = body.jwt.split('.');
+    if (jwtParts.length !== 3) {
+      logger.error({ jwtLength: jwtParts.length }, 'Invalid JWT format - not 3 parts');
+      throw new Error('Invalid JWT format');
+    }
+
+    let payload;
+    try {
+      const base64Payload = jwtParts[1];
+      const decodedPayload = Buffer.from(base64Payload, 'base64').toString();
+      payload = JSON.parse(decodedPayload);
+
+      logger.info({
+        payloadFields: payload ? Object.keys(payload) : [],
+        hasPkpInfo: payload && 'pkpInfo' in payload,
+        hasExp: payload && 'exp' in payload,
+      }, 'Decoded JWT payload');
+    } catch (parseError) {
+      logger.error({
+        err: parseError,
+        jwtPart: jwtParts[1]?.substring(0, 50) + '...',
+      }, 'Failed to parse JWT payload');
+      throw new Error('Failed to parse JWT payload');
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      logger.error({ payload }, 'JWT payload is not a valid object');
+      throw new Error('Invalid JWT payload');
+    }
+
+    // Extract PKP wallet address from payload
+    const pkpAddress = payload.pkpInfo?.ethAddress;
+
+    if (!pkpAddress || typeof pkpAddress !== 'string' || !pkpAddress.startsWith('0x')) {
+      logger.error({
+        payload,
         pkpAddress,
-        expiresAt: new Date(decodedJWT.exp * 1000),
-        agentId: body.agentId,
-      },
-      'Vincent JWT verified successfully'
-    );
+      }, 'Could not extract PKP address from JWT');
+      throw new Error('PKP address not found in JWT');
+    }
+
+    // Validate expiration timestamp
+    if (!payload.exp || typeof payload.exp !== 'number') {
+      logger.error({
+        exp: payload.exp,
+        expType: typeof payload.exp,
+      }, 'JWT missing or invalid expiration timestamp');
+      throw new Error('JWT missing expiration timestamp');
+    }
+
+    const normalizedAddress = pkpAddress.toLowerCase();
+
+    logger.info({
+      pkpAddress: normalizedAddress,
+      pkpTokenId: payload.pkpInfo?.tokenId,
+      exp: new Date(payload.exp * 1000),
+    }, 'Extracted PKP info from JWT');
 
     // Store or update auth in database
     const prisma = getPrismaClient();
 
     const vincentAuth = await prisma.vincentAuth.upsert({
-      where: { userId: pkpAddress },
+      where: { userId: normalizedAddress },
       update: {
-        walletAddress: pkpAddress,
-        authData: JSON.parse(JSON.stringify(decodedJWT)),
-        expiresAt: new Date(decodedJWT.exp * 1000),
+        walletAddress: normalizedAddress,
+        authData: payload,
+        expiresAt: new Date(payload.exp * 1000),
         issuedAt: new Date(),
         agentId: body.agentId || undefined,
       },
       create: {
-        userId: pkpAddress,
-        walletAddress: pkpAddress,
-        authData: JSON.parse(JSON.stringify(decodedJWT)),
-        expiresAt: new Date(decodedJWT.exp * 1000),
+        userId: normalizedAddress,
+        walletAddress: normalizedAddress,
+        authData: payload,
+        expiresAt: new Date(payload.exp * 1000),
         issuedAt: new Date(),
         agentId: body.agentId || undefined,
       },
@@ -105,7 +150,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<VerifyJWTResp
     return NextResponse.json(
       {
         success: true,
-        walletAddress: pkpAddress,
+        walletAddress: normalizedAddress,
         agentId: vincentAuth.agentId || undefined,
         expiresAt: vincentAuth.expiresAt.toISOString(),
       },

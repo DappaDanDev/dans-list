@@ -5,11 +5,13 @@
  *
  * Flow:
  * 1. User clicks "Connect Wallet"
- * 2. Redirects to Vincent authorization page
- * 3. User approves in Vincent
- * 4. Redirects back with JWT in URL
- * 5. Component extracts JWT, stores in localStorage
- * 6. Calls backend to verify and store in DB
+ * 2. Stores current URL in localStorage
+ * 3. Redirects to Vincent authorization page
+ * 4. User approves in Vincent
+ * 5. Vincent redirects to /vincent/callback with JWT
+ * 6. Callback page extracts JWT, verifies with backend
+ * 7. Callback page redirects back to original page
+ * 8. Component detects stored JWT and completes auth
  *
  * Reference: Vincent WebAuthClient docs
  * https://github.com/LIT-Protocol/vincent-app-sdk/tree/main/packages/webAuthClient
@@ -19,15 +21,16 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { getWebAuthClient } from '@lit-protocol/vincent-app-sdk/webAuthClient';
-import { isExpired } from '@lit-protocol/vincent-app-sdk/jwt';
 import { loggers } from '@/lib/utils/logger';
 
 const logger = loggers.vincent;
 
 /**
- * Local storage key for JWT
+ * Local storage keys
  */
 const VINCENT_JWT_KEY = 'VINCENT_AUTH_JWT';
+const VINCENT_RETURN_URL_KEY = 'VINCENT_RETURN_URL';
+const VINCENT_AGENT_ID_KEY = 'VINCENT_AGENT_ID';
 
 /**
  * Component props
@@ -48,10 +51,13 @@ export function VincentConnect({ onAuthComplete, onAuthError, agentId }: Vincent
 
   // Initialize Vincent WebAuthClient
   const [vincentAppClient] = useState(() => {
-    const appId = process.env.NEXT_PUBLIC_VINCENT_APP_ID;
-    if (!appId) {
+    const appIdStr = process.env.NEXT_PUBLIC_VINCENT_APP_ID;
+    if (!appIdStr) {
       throw new Error('NEXT_PUBLIC_VINCENT_APP_ID not configured');
     }
+
+    // Convert to number - Vincent SDK expects numeric appId
+    const appId = Number(appIdStr);
 
     return getWebAuthClient({ appId });
   });
@@ -88,37 +94,32 @@ export function VincentConnect({ onAuthComplete, onAuthError, agentId }: Vincent
   useEffect(() => {
     async function handleAuthFlow() {
       try {
-        // Check if URL contains JWT after redirect
-        if (vincentAppClient.uriContainsVincentJWT()) {
-          logger.info('Detected JWT in URL after redirect');
-
-          const redirectUri = window.location.origin;
-          const { jwtStr } = vincentAppClient.decodeVincentJWTFromUri(redirectUri);
-
-          // Store JWT in localStorage
-          localStorage.setItem(VINCENT_JWT_KEY, jwtStr);
-
-          // Remove JWT from URL (clean up)
-          vincentAppClient.removeVincentJWTFromURI();
-
-          // Verify JWT with backend
-          await verifyJwtWithBackend(jwtStr);
-
-          return;
-        }
-
         // Check for existing JWT in localStorage
+        // (JWT from callback route will already be stored)
         const storedJwt = localStorage.getItem(VINCENT_JWT_KEY);
         if (storedJwt) {
-          // Check if expired
-          const expired = isExpired(storedJwt);
+          try {
+            // Manually check if JWT is expired (safer than Vincent SDK's isExpired)
+            const parts = storedJwt.split('.');
+            if (parts.length !== 3) {
+              throw new Error('Invalid JWT format');
+            }
 
-          if (!expired) {
-            logger.info('Found valid JWT in localStorage');
-            await verifyJwtWithBackend(storedJwt);
-            return;
-          } else {
-            logger.info('Stored JWT expired, clearing');
+            const payload = JSON.parse(atob(parts[1]));
+            const now = Math.floor(Date.now() / 1000);
+            const expired = payload.exp && payload.exp < now;
+
+            if (!expired) {
+              logger.info('Found valid JWT in localStorage');
+              await verifyJwtWithBackend(storedJwt);
+              return;
+            } else {
+              logger.info('Stored JWT expired, clearing');
+              localStorage.removeItem(VINCENT_JWT_KEY);
+            }
+          } catch (jwtError) {
+            // JWT is malformed or invalid, clear it
+            logger.warn({ err: jwtError }, 'Invalid JWT in localStorage, clearing');
             localStorage.removeItem(VINCENT_JWT_KEY);
           }
         }
@@ -135,7 +136,7 @@ export function VincentConnect({ onAuthComplete, onAuthError, agentId }: Vincent
     }
 
     handleAuthFlow();
-  }, [vincentAppClient, verifyJwtWithBackend, onAuthError]);
+  }, [verifyJwtWithBackend, onAuthError]);
 
   /**
    * Initiate Vincent authorization flow
@@ -146,9 +147,29 @@ export function VincentConnect({ onAuthComplete, onAuthError, agentId }: Vincent
       setIsConnecting(true);
       setError(null);
 
+      // Get configured app URL (ensures consistency with Vincent config)
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+      // Store current URL for return after auth
+      localStorage.setItem(VINCENT_RETURN_URL_KEY, window.location.pathname);
+
+      // Store agent ID if provided
+      if (agentId) {
+        localStorage.setItem(VINCENT_AGENT_ID_KEY, agentId);
+      }
+
+      logger.info('Redirecting to Vincent auth', {
+        returnUrl: window.location.pathname,
+        agentId,
+        appUrl,
+      });
+
       // Redirect to Vincent for authorization
+      // Use dedicated callback route with configured app URL
+      const callbackUri = `${appUrl}/vincent/callback`;
+
       vincentAppClient.redirectToConnectPage({
-        redirectUri: window.location.href,
+        redirectUri: callbackUri,
       });
     } catch (err) {
       logger.error({ err }, 'Failed to initiate Vincent auth');

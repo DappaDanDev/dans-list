@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeProductImage } from '@/lib/ai/imageAnalysis';
-import { getLogger } from '@/lib/utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 
-const logger = getLogger('api:analyze');
+const logger = createLogger('api:analyze');
+
+// Allow larger multipart payloads (default ~1MB is too small for images)
+export const config = {
+  api: {
+    bodyParser: false,
+    sizeLimit: '10mb',
+  },
+};
 
 /**
  * POST /api/analyze
@@ -16,32 +24,32 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   logger.info({ clientIp }, 'Image analysis request received');
 
   try {
-    // Parse request body
-    let body: { image?: string };
-    try {
-      body = await req.json();
-    } catch (error) {
-      logger.warn({ error, clientIp }, 'Invalid JSON in request body');
+    const formData = await req.formData();
+    const imageField = formData.get('image');
+
+    if (!imageField) {
+      logger.warn({ clientIp }, 'Missing image field in form data');
       return NextResponse.json(
-        { error: 'Invalid JSON in request body' },
+        { error: 'Image field is required' },
         { status: 400 },
       );
     }
 
-    // Validate image data
-    const { image } = body;
-    if (!image || typeof image !== 'string' || image.trim() === '') {
-      logger.warn({ clientIp }, 'Missing or invalid image data');
-      return NextResponse.json(
-        { error: 'Image data is required and must be a string' },
-        { status: 400 },
-      );
+    let base64Image: string;
+
+    if (typeof imageField === 'string') {
+      base64Image = imageField;
+    } else {
+      const arrayBuffer = await imageField.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      const mimeType = imageField.type || 'image/png';
+      base64Image = `data:${mimeType};base64,${base64}`;
     }
 
     // Analyze the image
-    logger.debug({ clientIp, imageLength: image.length }, 'Starting image analysis');
+    logger.debug({ clientIp, imageLength: base64Image.length }, 'Starting image analysis');
 
-    const result = await analyzeProductImage(image);
+    const result = await analyzeProductImage(base64Image);
 
     const duration = Date.now() - startTime;
     logger.info(
