@@ -17,10 +17,13 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.53",
+    "@avail-project/nexus": "^1.1.0",
     "@blockscout/app-sdk": "^0.1.2",
     "@envio-dev/hypersync-client": "^0.6.6",
+    "@lit-protocol/lit-node-client": "^7.3.1",
     "@prisma/client": "^6.17.1",
     "ai": "^5.0.76",
+    "ethers": "^6.15.0",
     "graphql": "^16.11.0",
     "graphql-request": "^7.3.1",
     "next": "15.5.6",

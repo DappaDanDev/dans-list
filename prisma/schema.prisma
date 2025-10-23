@@ -56,6 +56,11 @@ model Listing {
   features         Json
   searchTags       String[]
 
+  // Vector search (pgvector)
+  embedding                Unsupported("vector(1536)")?
+  embeddingModel           String?
+  embeddingGeneratedAt     DateTime?
+
   // AI Analysis
   aiProofHash      String?
 

@@ -87,6 +87,9 @@ export const loggers = {
   envio: createLogger('Envio'),
   hardhat: createLogger('Hardhat'),
   prisma: createLogger('Prisma'),
+  a2a: createLogger('A2A'),
+  vincent: createLogger('Vincent'),
+  nexus: createLogger('Nexus'),
 };
 
 // Type exports

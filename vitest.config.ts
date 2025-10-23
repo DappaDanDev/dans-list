@@ -28,6 +28,7 @@ export default defineConfig({
       '@/lib': path.resolve(__dirname, './src/lib'),
       '@/app': path.resolve(__dirname, './src/app'),
       '@/components': path.resolve(__dirname, './src/app/components'),
+      '@nexus-sdk/client': path.resolve(__dirname, './src/__mocks__/@nexus-sdk/client.ts'),
     },
   },
 });

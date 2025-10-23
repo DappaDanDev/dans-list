@@ -3,6 +3,7 @@ import {
   BlockscoutMonitoringService,
   CHAIN_IDS,
   type TransactionStatus,
+  type TransactionEvent,
 } from '../blockscout.service';
 import type { TransactionReceipt } from 'viem';
 
@@ -275,6 +276,182 @@ describe('BlockscoutMonitoringService', () => {
       expect(service.getTransactionHistory()).toHaveLength(0);
       expect(service.getTransaction('0x1')).toBeUndefined();
       expect(service.getTransaction('0x2')).toBeUndefined();
+    });
+  });
+
+  describe('Event Emission', () => {
+    it('should emit transaction:tracked event when tracking a transaction', () => {
+      return new Promise<void>((resolve) => {
+        const hash = '0xevent123';
+        const chainId = CHAIN_IDS.BASE_SEPOLIA;
+
+        service.once('transaction:tracked', (event: TransactionEvent) => {
+          expect(event.type).toBe('transaction:tracked');
+          expect(event.transaction.hash).toBe(hash);
+          expect(event.transaction.chainId).toBe(chainId);
+          expect(event.transaction.status).toBe('pending');
+          expect(event.timestamp).toBeDefined();
+          resolve();
+        });
+
+        service.trackTransaction(hash, chainId);
+      });
+    });
+
+    it('should emit transaction:pending event when tracking a transaction', () => {
+      return new Promise<void>((resolve) => {
+        const hash = '0xpending123';
+        const chainId = CHAIN_IDS.ARBITRUM_SEPOLIA;
+
+        service.once('transaction:pending', (event: TransactionEvent) => {
+          expect(event.type).toBe('transaction:pending');
+          expect(event.transaction.hash).toBe(hash);
+          expect(event.transaction.status).toBe('pending');
+          resolve();
+        });
+
+        service.trackTransaction(hash, chainId);
+      });
+    });
+
+    it('should emit transaction:confirmed event when transaction succeeds', () => {
+      return new Promise<void>((resolve) => {
+        const hash = '0xconfirmed123';
+        const chainId = CHAIN_IDS.BASE_SEPOLIA;
+
+        service.trackTransaction(hash, chainId);
+
+        service.once('transaction:confirmed', (event: TransactionEvent) => {
+          expect(event.type).toBe('transaction:confirmed');
+          expect(event.transaction.hash).toBe(hash);
+          expect(event.transaction.status).toBe('confirmed');
+          expect(event.transaction.blockNumber).toBe(12345);
+          expect(event.transaction.gasUsed).toBe(21000n);
+          resolve();
+        });
+
+        const receipt: TransactionReceipt = {
+          blockHash: '0xblock',
+          blockNumber: 12345n,
+          contractAddress: null,
+          cumulativeGasUsed: 100000n,
+          effectiveGasPrice: 1000000000n,
+          from: '0xfrom',
+          gasUsed: 21000n,
+          logs: [],
+          logsBloom: '0x',
+          status: 'success',
+          to: '0xto',
+          transactionHash: hash,
+          transactionIndex: 0,
+          type: 'eip1559',
+          root: undefined,
+        };
+
+        service.updateTransactionStatus(hash, receipt);
+      });
+    });
+
+    it('should emit transaction:failed event when transaction fails', () => {
+      return new Promise<void>((resolve) => {
+        const hash = '0xfailed123';
+        const chainId = CHAIN_IDS.BASE_SEPOLIA;
+
+        service.trackTransaction(hash, chainId);
+
+        service.once('transaction:failed', (event: TransactionEvent) => {
+          expect(event.type).toBe('transaction:failed');
+          expect(event.transaction.hash).toBe(hash);
+          expect(event.transaction.status).toBe('failed');
+          resolve();
+        });
+
+        const receipt: TransactionReceipt = {
+          blockHash: '0xblock',
+          blockNumber: 54321n,
+          contractAddress: null,
+          cumulativeGasUsed: 50000n,
+          effectiveGasPrice: 1000000000n,
+          from: '0xfrom',
+          gasUsed: 50000n,
+          logs: [],
+          logsBloom: '0x',
+          status: 'reverted',
+          to: '0xto',
+          transactionHash: hash,
+          transactionIndex: 0,
+          type: 'eip1559',
+          root: undefined,
+        };
+
+        service.updateTransactionStatus(hash, receipt);
+      });
+    });
+
+    it('should emit transaction:updated event for all transaction updates', () => {
+      const hash = '0xupdated123';
+      const chainId = CHAIN_IDS.BASE_SEPOLIA;
+
+      let updateCount = 0;
+
+      service.on('transaction:updated', (event: TransactionEvent) => {
+        updateCount++;
+        expect(event.transaction.hash).toBe(hash);
+      });
+
+      // Track transaction (should emit 2 updates: tracked + pending)
+      service.trackTransaction(hash, chainId);
+      expect(updateCount).toBe(2);
+
+      // Update status (should emit 1 more update: confirmed)
+      const receipt: TransactionReceipt = {
+        blockHash: '0xblock',
+        blockNumber: 99999n,
+        contractAddress: null,
+        cumulativeGasUsed: 100000n,
+        effectiveGasPrice: 1000000000n,
+        from: '0xfrom',
+        gasUsed: 21000n,
+        logs: [],
+        logsBloom: '0x',
+        status: 'success',
+        to: '0xto',
+        transactionHash: hash,
+        transactionIndex: 0,
+        type: 'eip1559',
+        root: undefined,
+      };
+
+      service.updateTransactionStatus(hash, receipt);
+      expect(updateCount).toBe(3);
+    });
+
+    it('should support multiple event listeners', () => {
+      return new Promise<void>((resolve) => {
+        const hash = '0xmulti123';
+        const chainId = CHAIN_IDS.BASE_SEPOLIA;
+
+        let listener1Called = false;
+        let listener2Called = false;
+
+        service.once('transaction:tracked', () => {
+          listener1Called = true;
+          checkBothCalled();
+        });
+
+        service.once('transaction:tracked', () => {
+          listener2Called = true;
+          checkBothCalled();
+        });
+
+        function checkBothCalled() {
+          if (listener1Called && listener2Called) {
+            resolve();
+          }
+        }
+
+        service.trackTransaction(hash, chainId);
+      });
     });
   });
 });

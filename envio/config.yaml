@@ -1,7 +1,7 @@
 name: DansListMarketplace
 description: AI Agent Marketplace Activity Tracker
 networks:
-  - id: 421614  # Arbitrum Sepolia
+  - id: 84532  # Base Sepolia (updated from Arbitrum Sepolia per Tasklist)
     start_block: 0
     contracts:
       - name: VerifiableMarketplace
@@ -9,9 +9,10 @@ networks:
         address: ${MARKETPLACE_ADDRESS}  # Injected dynamically via sync script
         handler: ./src/EventHandlers.ts
         events:
-          - event: ListingCreated
-          - event: PurchaseInitiated
-          - event: AgentRegistered
+          - event: ListingCreated        # ✓ Exists in contract
+          - event: ListingPurchased      # ✓ Exists in contract (was PurchaseInitiated)
+          - event: MarketplaceFeeUpdated # ✓ Exists in contract
+          - event: FundsWithdrawn        # ✓ Exists in contract
 
 # GraphQL schema location
 schema_path: ./schema.graphql

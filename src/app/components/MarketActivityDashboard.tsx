@@ -82,13 +82,18 @@ export function MarketActivityDashboard() {
   }, [fetchDashboardData, isPolling]);
 
   /**
-   * Format BigInt values for display
+   * Format BigInt values for display (safe for large values)
+   * Uses string math to avoid Number() overflow
    */
   const formatVolume = (volume: string): string => {
     try {
       const volumeBigInt = BigInt(volume);
-      const volumeEth = Number(volumeBigInt) / 1e18;
-      return volumeEth.toFixed(4);
+      // Divide by 10^18 using BigInt to avoid overflow
+      const ethWhole = volumeBigInt / BigInt(1e18);
+      const ethRemainder = volumeBigInt % BigInt(1e18);
+      // Format with 4 decimal places
+      const decimal = ethRemainder.toString().padStart(18, '0').slice(0, 4);
+      return `${ethWhole}.${decimal}`;
     } catch {
       return '0.0000';
     }

@@ -465,231 +465,130 @@ export class MarketAnalyticsService {
 
 ## Phase 4: Wallet and Payment Integration (Day 3 - 10 hours)
 
-### Task 4.1: Setup Vincent SDK (1.5 hours) **DEFERRED TO PHASE 3**
+_Goal: light up autonomous wallets and payments so Buyer/Seller agents can settle real trades and our dashboards reflect on-chain activity._
 
-**Note: Vincent (Lit Protocol PKP wallets) has been deferred to Phase 3 per project requirements**
+### Task 4.1: Implement Vincent Wallet Service (2 hours)
 
-Create `lib/vincent/wallet.ts`:
+Create `src/lib/vincent/wallet.service.ts` to manage PKP wallet lifecycle using `@lit-protocol/lit-node-client`.
+- [ ] Instantiate a shared `LitNodeClient` and expose `createAgentWallet(agentId: string)` plus `signTypedData(request)` helpers that persist `vincentPkpId` and `policies` on `Agent` (`prisma/schema.prisma:91-122`).
+- [ ] Update `scripts/validate-env.mjs` to require `VINCENT_LIT_NETWORK` and warn when unset (`scripts/validate-env.mjs:17-101`).
+- [ ] Wire a CLI script `scripts/create-agent-wallet.ts` that provisions wallets for seeded agents.
+- [ ] Add Vitest coverage in `src/lib/vincent/__tests__/wallet.service.test.ts` mocking Lit responses and asserting structured logging with `loggers.vincent`.
 
-```typescript
-import { VincentSDK } from '@lit-protocol/vincent-sdk';
+### Task 4.2: Apply Vincent Policies in Agents & A2A (1.5 hours)
 
-export async function createAgentWallet(agentId: string) {
-  // Create PKP wallet
-  // Set policies
-  // Return wallet details
-}
-```
+- [ ] Update `src/lib/agents/buyer/agent.ts` so `executePurchase` ensures an active Vincent wallet, records policy hashes on `Message`, and includes signature proofs in A2A payloads.
+- [ ] Update `src/lib/agents/seller/agent.ts` to store per-listing policy metadata and expose `setPolicyThresholds` that syncs to Vincent before publishing listings.
+- [ ] Extend `src/lib/agents/a2a/server.ts` to validate wallet proofs before invoking handlers, returning `ErrorCodes.UNAUTHORIZED` when verification fails.
+- [ ] Add scenario tests in `src/lib/agents/buyer/__tests__/agent.test.ts` and `src/lib/agents/seller/__tests__/agent.test.ts` covering policy enforcement and failure paths.
 
-- [ ] Install Vincent SDK - **DEFERRED**
-- [ ] Create wallet creation function - **DEFERRED**
-- [ ] Implement policy builder - **DEFERRED**
-- [ ] Test wallet creation - **DEFERRED**
+### Task 4.3: Integrate Avail Nexus Payment Service (2 hours)
 
-### Task 4.2: Implement Wallet Policy Engine (1.5 hours) **DEFERRED TO PHASE 3**
-
-Create `lib/vincent/policies.ts`:
-
-```typescript
-export function createBuyerPolicy() {
-  // Spending limits
-  // Approved addresses
-}
-```
-
-- [ ] Define buyer policies - **DEFERRED**
-- [ ] Define seller policies - **DEFERRED**
-- [ ] Create policy update function - **DEFERRED**
-- [ ] Test policy enforcement - **DEFERRED**
-
-### Task 4.3: Create Smart Contracts with Hardhat (2.5 hours) ✅
-
-Create `contracts/VerifiableMarketplace.sol`:
-
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
-
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-
-contract VerifiableMarketplace is ReentrancyGuard, Pausable, Ownable {
-    // Full implementation with listing creation, purchases, fees, etc.
-}
-```
-
-- [x] Write main contract (VerifiableMarketplace.sol)
-- [x] Create comprehensive TypeScript test file
-- [x] Run tests: `npx hardhat test`
-- [x] Check gas usage and optimize
-- [x] Implement security patterns (ReentrancyGuard, Pausable)
+- [ ] Create `src/lib/payments/nexus.service.ts` that wraps the official Nexus SDK, exposing `findRoute` and `executeRoute` with structured logging and retry logic.
+- [ ] Extend `scripts/validate-env.mjs` to validate `NEXUS_NETWORK` and any required API tokens.
+- [ ] Modify `BuyerAgent.executePurchase` to call Nexus for route discovery, persist `nexusRouteId`/`nexusSteps` on `Transaction` (`prisma/schema.prisma:124-159`), and update status once the webhook callback lands.
+- [ ] Add `src/app/api/nexus/webhook/route.ts` to verify Nexus callbacks and mark transactions `CONFIRMED`/`FAILED`.
+- [ ] Write tests in `src/lib/payments/__tests__/nexus.service.test.ts` and extend buyer agent tests for happy-path purchases.
 
 ### Task 4.4: Deploy Contracts with Hardhat Ignition (1.5 hours)
 
-Create deployment module `ignition/modules/Marketplace.ts`:
+- [ ] Add `ignition/modules/VerifiableMarketplace.ts` targeting Base Sepolia (chain 84532) with configurable PYUSD address per PRD §3.5.
+- [ ] Implement `scripts/deploy-marketplace.ts` that runs Ignition, captures deployed addresses, and pipes them into `scripts/sync-envio-config.ts`.
+- [ ] Document deployment steps in `README.md` and update `.env.example` with `MARKETPLACE_ADDRESS` placeholders (`.env.example:47-63`).
+- [ ] Add a smoke test `test/VerifiableMarketplace.deploy.ts` asserting owner fee configuration and pause controls post-deploy.
 
-```typescript
-import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
+### Task 4.5: Build Transaction History View (1 hour)
 
-const MarketplaceModule = buildModule("MarketplaceModule", (m) => {
-  const pyusd = m.getParameter("pyusd", "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8");
-  const marketplace = m.contract("Marketplace", [pyusd]);
-  return { marketplace };
-});
+- [ ] Create `src/app/components/TransactionHistory.tsx` rendering paginated history using `useBlockscout` (`src/lib/monitoring/useBlockscout.ts:9-69`).
+- [ ] Add `src/app/api/transactions/route.ts` to proxy Blockscout SDK with cache headers.
+- [ ] Write UI tests in `src/app/components/__tests__/TransactionHistory.test.tsx`, including jest-axe accessibility assertions and filter behaviour.
 
-export default MarketplaceModule;
-```
+### Task 4.6: Finalize Blockscout Monitoring Integration (1 hour)
 
-- [ ] Create Ignition module
-- [ ] Write deployment script
-- [ ] Deploy to testnet
-- [ ] Verify contract
-- [ ] Save deployed addresses
-
-### Task 4.5: Setup Avail Nexus Integration (2 hours) **DEFERRED TO PHASE 3**
-
-**Note: Avail Nexus (universal payment service) has been deferred to Phase 3 per project requirements**
-
-Create `lib/payments/nexus.ts`:
-
-```typescript
-import { NexusSDK } from '@avail-project/nexus';
-
-export class UniversalPaymentService {
-  private nexus: NexusSDK;
-
-  async executePaymentWithAnyToken(
-    buyer: string,
-    seller: string,
-    amount: bigint
-  ) {
-    // Implementation
-  }
-}
-```
-
-- [ ] Install Nexus SDK - **DEFERRED**
-- [ ] Create payment service - **DEFERRED**
-- [ ] Implement route finding - **DEFERRED**
-- [ ] Test multi-token payments - **DEFERRED**
-
-### Task 4.6: Integrate Blockscout Monitoring (1 hour) ✅
-
-Create `lib/monitoring/blockscout.ts`:
-
-```typescript
-// Using @blockscout/app-sdk (no API keys needed)
-import { BlockscoutMonitoringService } from './blockscout.service';
-
-export function useTransactionMonitor() {
-  // Monitor transactions
-  // Show notifications
-}
-```
-
-- [x] Create monitoring service class
-- [x] Setup transaction tracking
-- [x] Add WebSocket support for real-time updates
-- [x] Test with comprehensive unit tests
-
-### Task 4.7: Build Transaction History View (1 hour)
-
-- [ ] Create history component
-- [ ] Integrate Blockscout SDK
-- [ ] Format transaction data
-- [ ] Add filtering options
+- [ ] Expose transaction context so `TransactionHistory` and notification toasts share state (`src/lib/monitoring/blockscout.service.ts:95-200`).
+- [ ] Extend `src/lib/monitoring/__tests__/blockscout.service.test.ts` to cover Nexus webhook updates and history pagination.
+- [ ] Capture integration notes and screenshots in `docs/monitoring.md` once UI is complete.
 
 ## Phase 5: Integration and Testing (Day 4 - 8 hours)
 
-### Task 5.1: Create End-to-End Purchase Flow (2 hours)
+_Goal: deliver a shippable marketplace experience with real data, resilient error handling, and comprehensive test coverage._
 
-Connect all components:
+### Task 5.0: Marketplace Shell & Navigation (1 hour)
 
-- [ ] User uploads image
-- [ ] AI analyzes
-- [ ] Listing created
-- [ ] Buyer agent searches
-- [ ] Purchase executed
-- [ ] Payment verified
-- [ ] Dashboard updated
+- [ ] Replace the component showcase in `src/app/page.tsx` with a full marketplace layout (hero, CTA, live metrics, featured listings).
+- [ ] Add navigation in `src/app/layout.tsx` linking Upload Listing, Agent Insights, Market Activity, and Transaction History.
+- [ ] Ensure global styles in `src/app/globals.css` support dark/light themes per PRD visuals.
 
-### Task 5.2: Implement Real-time Activity Feed (1.5 hours)
+### Task 5.1: End-to-End Purchase Flow Validation (2 hours)
 
-Create `app/components/ActivityFeed.tsx`:
+- [ ] Automate the full flow in `tests/e2e/purchase-flow.spec.ts`: image upload → `src/lib/ai/imageAnalysis.ts` → seller listing → buyer semantic search (`src/app/api/a2a/route.ts`) → Nexus payment execution → HyperSync dashboard refresh.
+- [ ] Seed deterministic listings using Prisma (`prisma/seed.ts`) so tests never rely on placeholders.
+- [ ] Assert required Pino logs for each step using log spies in Vitest.
 
-```typescript
-export function ActivityFeed() {
-  // Subscribe to blockchain events
-  // Display real-time updates
-}
-```
+### Task 5.2: Complete HyperSync Analytics Integration (1.5 hours)
 
-- [ ] Create feed component
-- [ ] Setup WebSocket connection
-- [ ] Subscribe to events
-- [ ] Add auto-refresh
+- [ ] Replace mocks in `src/lib/analytics/hypersync.service.ts:55-240` with real GraphQL queries + streaming subscriptions.
+- [ ] Update `scripts/sync-envio-config.ts` to emit entities for `MarketplaceFeeEvent` and `FundsWithdrawnEvent`, then regenerate types.
+- [ ] Add tests in `src/lib/analytics/__tests__/hypersync.service.test.ts` mocking HyperSync HTTP + WebSocket responses.
+- [ ] Ensure `MarketActivityDashboard` (`src/app/components/MarketActivityDashboard.tsx`) consumes the updated service with fallback polling.
 
-### Task 5.3: Add L2 Deployment Support (1.5 hours)
+### Task 5.3: Real-time Activity Feed Component (1 hour)
 
-- [ ] Configure Arbitrum RPC
-- [ ] Update contract deployment
-- [ ] Test on L2 testnet
-- [ ] Verify gas costs
+- [ ] Implement `src/app/components/ActivityFeed.tsx` subscribed to `streamMarketEvents` to render live event tiles.
+- [ ] Write tests in `src/app/components/__tests__/ActivityFeed.test.tsx` covering loading/empty/high-volume states with jest-axe.
+- [ ] Add Storybook stories (if enabled) or MDX docs for design review.
 
-### Task 5.4: Implement Error Handling (1 hour)
+### Task 5.4: Global Error Handling & Resilience (1 hour)
 
-- [ ] Add try-catch blocks
-- [ ] Create error boundaries
-- [ ] Add user-friendly messages
-- [ ] Implement retry logic
+- [ ] Add `src/app/error.tsx` and `src/app/components/ErrorToast.tsx` for user-friendly error surfacing.
+- [ ] Normalise API error payloads across `src/app/api/**/route.ts` to `{ error: { code, message, traceId } }` and cover with integration tests.
+- [ ] Implement retry helpers (exponential backoff + circuit breaker counters) for Nexus/HyperSync calls with structured logging.
 
-### Task 5.5: Performance Optimization (1 hour)
+### Task 5.5: Performance & UX Optimisation (1 hour)
 
-- [ ] Add response caching
-- [ ] Optimize database queries
-- [ ] Implement lazy loading
-- [ ] Minimize bundle size
+- [ ] Analyse bundle size (`next build --analyze`), trim unused exports, and document results in `docs/perf-report.md`.
+- [ ] Memoise expensive selectors and add Suspense boundaries for analytics components.
+- [ ] Set cache headers for analytics endpoints (`/api/agents/[id]`, `/api/transactions`) and verify via integration tests.
 
-### Task 5.6: Testing Suite (1 hour)
+### Task 5.6: Test Suite & QA Sign-off (1.5 hours)
 
-- [ ] Write unit tests
-- [ ] Create integration tests
-- [ ] Test error scenarios
-- [ ] Run coverage report
-
+- [ ] Run `pnpm lint`, `pnpm typecheck`, `pnpm test --coverage`, `pnpm test:e2e`, and publish coverage summary.
+- [ ] Add CI workflow (GitHub Actions) covering Node 18/20 with Postgres service and Hardhat jobs.
+- [ ] Execute manual QA checklist (wallet creation, cross-chain payment, dashboard updates) and log results in `QA_CHECKLIST.md`.
+- [ ] Draft release notes summarising Phase 4 & 5 deliverables.
 
 ## Testing Checklist
 
-### Unit Tests with Hardhat
+### Contract & Wallet Testing
 
-- [ ] Smart contract unit tests
-- [ ] Test all functions
-- [ ] Test access controls
-- [ ] Test revert conditions
-- [ ] Gas optimization tests
+- [ ] Hardhat unit tests for VerifiableMarketplace fee + withdrawal flows.
+- [ ] Ignition deployment smoke test (`test/VerifiableMarketplace.deploy.ts`).
+- [ ] Vincent wallet service Vitest suite.
 
-### Integration Tests
+### Integration & UI Tests
 
-- [ ] API endpoints
-- [ ] Agent communication
-- [ ] Blockchain interactions
-- [ ] Notification system
-- [ ] End-to-end flows
+- [ ] API route integration tests (A2A, agents, transactions, Nexus webhook).
+- [ ] HyperSync analytics unit + integration tests.
+- [ ] UI accessibility tests for Agent Dashboard, Market Activity Dashboard, Transaction History, Activity Feed.
 
-### Hardhat Testing Commands
+### End-to-End Tests
+
+- [ ] Playwright/Vitest E2E covering image upload → purchase → analytics refresh.
+- [ ] Nexus webhook simulation ensuring transaction status updates and dashboard refresh.
+
+### Recommended Commands
 
 ```bash
-# Run all tests
+# Quality gates
+pnpm lint
+pnpm typecheck
+pnpm test --coverage
+pnpm test:e2e
+
+# Contracts & deployment
 npx hardhat test
+npx hardhat ignition deploy ./ignition/modules/VerifiableMarketplace.ts --network baseSepolia
 
-# Run with gas reporting
-npx hardhat test --gas-reporter
-
-# Run coverage analysis
-npx hardhat coverage
-
-# Run on fork
-npx hardhat test --fork https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY
+# Sync Envio after deployment
+pnpm tsx scripts/sync-envio-config.ts
 ```

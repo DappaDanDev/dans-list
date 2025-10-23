@@ -14,8 +14,11 @@ interface EventContext {
   PurchaseEvent: {
     create: (data: PurchaseEventData) => Promise<void>;
   };
-  AgentRegistration: {
-    create: (data: AgentRegistrationData) => Promise<void>;
+  MarketplaceFeeEvent: {
+    create: (data: MarketplaceFeeEventData) => Promise<void>;
+  };
+  FundsWithdrawnEvent: {
+    create: (data: FundsWithdrawnEventData) => Promise<void>;
   };
   MarketMetrics: {
     upsert: (data: MarketMetricsUpdate) => Promise<void>;
@@ -70,10 +73,20 @@ interface PurchaseEventData {
   blockNumber: bigint;
 }
 
-interface AgentRegistrationData {
+interface MarketplaceFeeEventData {
   id: string;
-  agentId: string;
-  walletAddress: string;
+  oldFee: number;
+  newFee: number;
+  timestamp: bigint;
+  chainId: number;
+  transactionHash: string;
+  blockNumber: bigint;
+}
+
+interface FundsWithdrawnEventData {
+  id: string;
+  recipient: string;
+  amount: bigint;
   timestamp: bigint;
   chainId: number;
   transactionHash: string;
@@ -87,6 +100,7 @@ interface MarketMetrics {
   activeAgents24h: number;
   averagePrice: bigint;
   totalTransactions: number;
+  marketplaceFee: number;
   lastUpdated: bigint;
 }
 
@@ -97,6 +111,7 @@ interface MarketMetricsUpdate {
   activeAgents24h?: number | ((metrics: MarketMetrics | null) => number);
   averagePrice?: bigint | ((metrics: MarketMetrics | null) => bigint);
   totalTransactions?: number | ((metrics: MarketMetrics | null) => number);
+  marketplaceFee?: number | ((metrics: MarketMetrics | null) => number);
   lastUpdated?: bigint;
 }
 
@@ -107,18 +122,21 @@ interface ListingCreatedParams {
   timestamp: number;
 }
 
-interface PurchaseInitiatedParams {
+interface ListingPurchasedParams {
   listingId: string;
   buyer: string;
   seller: string;
-  amount: string;
-  timestamp: number;
+  price: string;
 }
 
-interface AgentRegisteredParams {
-  agentId: string;
-  walletAddress: string;
-  timestamp: number;
+interface MarketplaceFeeUpdatedParams {
+  oldFee: string;
+  newFee: string;
+}
+
+interface FundsWithdrawnParams {
+  recipient: string;
+  amount: string;
 }
 
 interface Event<T> {
@@ -196,24 +214,24 @@ export async function handleListingCreated(
 }
 
 /**
- * Handle PurchaseInitiated event
+ * Handle ListingPurchased event
  */
-export async function handlePurchaseInitiated(
-  event: Event<PurchaseInitiatedParams>,
+export async function handleListingPurchased(
+  event: Event<ListingPurchasedParams>,
   context: EventContext,
 ) {
-  const { listingId, buyer, seller, amount } = event.params;
-  const amountBigInt = BigInt(amount);
+  const { listingId, buyer, seller, price } = event.params;
+  const priceBigInt = BigInt(price);
 
   logger.info(
     {
       listingId,
       buyer,
       seller,
-      amount: amount.toString(),
+      price: price.toString(),
       txHash: event.transactionHash,
     },
-    'Processing PurchaseInitiated event',
+    'Processing ListingPurchased event',
   );
 
   try {
@@ -225,8 +243,8 @@ export async function handlePurchaseInitiated(
         walletAddress: buyer,
         totalPurchases: existingBuyer ? existingBuyer.totalPurchases + 1 : 1,
         totalVolume: existingBuyer
-          ? existingBuyer.totalVolume + amountBigInt
-          : amountBigInt,
+          ? existingBuyer.totalVolume + priceBigInt
+          : priceBigInt,
         lastActivity: event.timestamp,
         chainId: event.chainId,
         createdAt: existingBuyer?.createdAt || event.timestamp,
@@ -249,7 +267,7 @@ export async function handlePurchaseInitiated(
       listingId,
       buyer,
       seller,
-      amount: amountBigInt,
+      amount: priceBigInt,
       timestamp: event.timestamp,
       chainId: event.chainId,
       transactionHash: event.transactionHash,
@@ -259,68 +277,102 @@ export async function handlePurchaseInitiated(
     // Update global metrics
     await updateMarketMetrics(context, {
       newPurchase: true,
-      price: amountBigInt,
+      price: priceBigInt,
       timestamp: event.timestamp,
     });
 
     logger.debug(
       { listingId, txHash: event.transactionHash },
-      'PurchaseInitiated event processed',
+      'ListingPurchased event processed',
     );
   } catch (error) {
     logger.error(
       { err: error, listingId },
-      'Failed to process PurchaseInitiated event',
+      'Failed to process ListingPurchased event',
     );
     throw error;
   }
 }
 
 /**
- * Handle AgentRegistered event
+ * Handle MarketplaceFeeUpdated event
  */
-export async function handleAgentRegistered(
-  event: Event<AgentRegisteredParams>,
+export async function handleMarketplaceFeeUpdated(
+  event: Event<MarketplaceFeeUpdatedParams>,
   context: EventContext,
 ) {
-  const { agentId, walletAddress } = event.params;
+  const { oldFee, newFee } = event.params;
+  const oldFeeInt = parseInt(oldFee);
+  const newFeeInt = parseInt(newFee);
 
   logger.info(
     {
-      agentId,
-      walletAddress,
+      oldFee,
+      newFee,
       txHash: event.transactionHash,
     },
-    'Processing AgentRegistered event',
+    'Processing MarketplaceFeeUpdated event',
   );
 
   try {
-    // Create or update agent
-    await context.Agent.upsert({
-      id: agentId,
-      walletAddress,
-      totalListings: 0,
-      totalPurchases: 0,
-      totalVolume: BigInt(0),
-      lastActivity: event.timestamp,
-      chainId: event.chainId,
-      createdAt: event.timestamp,
-    });
-
-    // Create registration record
-    await context.AgentRegistration.create({
+    // Create fee update event record
+    await context.MarketplaceFeeEvent.create({
       id: `${event.transactionHash}-${event.chainId}`,
-      agentId,
-      walletAddress,
+      oldFee: oldFeeInt,
+      newFee: newFeeInt,
       timestamp: event.timestamp,
       chainId: event.chainId,
       transactionHash: event.transactionHash,
       blockNumber: event.blockNumber,
     });
 
-    logger.debug({ agentId }, 'AgentRegistered event processed successfully');
+    // Update global metrics with new fee
+    await updateMarketMetrics(context, {
+      newMarketplaceFee: newFeeInt,
+      timestamp: event.timestamp,
+    });
+
+    logger.debug({ oldFee, newFee }, 'MarketplaceFeeUpdated event processed');
   } catch (error) {
-    logger.error({ err: error, agentId }, 'Failed to process AgentRegistered event');
+    logger.error({ err: error }, 'Failed to process MarketplaceFeeUpdated event');
+    throw error;
+  }
+}
+
+/**
+ * Handle FundsWithdrawn event
+ */
+export async function handleFundsWithdrawn(
+  event: Event<FundsWithdrawnParams>,
+  context: EventContext,
+) {
+  const { recipient, amount } = event.params;
+  const amountBigInt = BigInt(amount);
+
+  logger.info(
+    {
+      recipient,
+      amount,
+      txHash: event.transactionHash,
+    },
+    'Processing FundsWithdrawn event',
+  );
+
+  try {
+    // Create withdrawal event record
+    await context.FundsWithdrawnEvent.create({
+      id: `${event.transactionHash}-${event.chainId}`,
+      recipient,
+      amount: amountBigInt,
+      timestamp: event.timestamp,
+      chainId: event.chainId,
+      transactionHash: event.transactionHash,
+      blockNumber: event.blockNumber,
+    });
+
+    logger.debug({ recipient, amount: amount.toString() }, 'FundsWithdrawn event processed');
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to process FundsWithdrawn event');
     throw error;
   }
 }
@@ -334,6 +386,7 @@ async function updateMarketMetrics(
     newListing?: boolean;
     newPurchase?: boolean;
     price?: bigint;
+    newMarketplaceFee?: number;
     timestamp: bigint;
   },
 ) {
@@ -347,6 +400,7 @@ async function updateMarketMetrics(
       activeAgents24h: 0,
       averagePrice: BigInt(0),
       totalTransactions: 0,
+      marketplaceFee: 0,
       lastUpdated: BigInt(0),
     };
 
@@ -361,6 +415,9 @@ async function updateMarketMetrics(
       totalVolume: update.price
         ? currentMetrics.totalVolume + update.price
         : currentMetrics.totalVolume,
+      marketplaceFee: update.newMarketplaceFee !== undefined
+        ? update.newMarketplaceFee
+        : currentMetrics.marketplaceFee,
       lastUpdated: update.timestamp,
     });
 
@@ -375,10 +432,13 @@ export const VerifiableMarketplace = {
   ListingCreated: {
     handler: handleListingCreated,
   },
-  PurchaseInitiated: {
-    handler: handlePurchaseInitiated,
+  ListingPurchased: {
+    handler: handleListingPurchased,
   },
-  AgentRegistered: {
-    handler: handleAgentRegistered,
+  MarketplaceFeeUpdated: {
+    handler: handleMarketplaceFeeUpdated,
+  },
+  FundsWithdrawn: {
+    handler: handleFundsWithdrawn,
   },
 };

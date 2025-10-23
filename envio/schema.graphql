@@ -25,6 +25,7 @@ type MarketMetrics @entity {
   activeAgents24h: Int!
   averagePrice: BigInt!
   totalTransactions: Int!
+  marketplaceFee: Int!
   lastUpdated: BigInt!
 }
 
@@ -60,12 +61,25 @@ type PurchaseEvent @entity {
 }
 
 """
-AgentRegistration entity tracks when agents are registered
+MarketplaceFeeEvent entity tracks marketplace fee changes
 """
-type AgentRegistration @entity {
+type MarketplaceFeeEvent @entity {
   id: ID!
-  agentId: String!
-  walletAddress: String!
+  oldFee: Int!
+  newFee: Int!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+"""
+FundsWithdrawnEvent entity tracks funds withdrawn from marketplace
+"""
+type FundsWithdrawnEvent @entity {
+  id: ID!
+  recipient: String!
+  amount: BigInt!
   timestamp: BigInt!
   chainId: Int!
   transactionHash: String!

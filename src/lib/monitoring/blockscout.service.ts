@@ -1,6 +1,7 @@
 import { useNotification } from '@blockscout/app-sdk';
 import type { TransactionReceipt } from 'viem';
 import { loggers } from '../utils/logger';
+import { EventEmitter } from 'events';
 
 /**
  * Chain ID mappings for supported networks
@@ -12,6 +13,7 @@ export const CHAIN_IDS = {
   ARBITRUM_SEPOLIA: '421614',
   POLYGON: '137',
   BASE: '8453',
+  BASE_SEPOLIA: '84532',
   OPTIMISM: '10',
   HARDHAT: '31337',
 } as const;
@@ -31,15 +33,53 @@ export interface TransactionStatus {
 }
 
 /**
- * Blockscout monitoring service for transaction tracking
+ * Transaction event types
  */
-export class BlockscoutMonitoringService {
+export type TransactionEventType =
+  | 'transaction:tracked'
+  | 'transaction:pending'
+  | 'transaction:confirmed'
+  | 'transaction:failed'
+  | 'transaction:updated';
+
+/**
+ * Transaction event payload
+ */
+export interface TransactionEvent {
+  type: TransactionEventType;
+  transaction: TransactionStatus;
+  timestamp: number;
+}
+
+/**
+ * Blockscout monitoring service for transaction tracking
+ * Extends EventEmitter to allow components to subscribe to transaction events
+ */
+export class BlockscoutMonitoringService extends EventEmitter {
   private pendingTransactions: Map<string, TransactionStatus> = new Map();
   private transactionHistory: TransactionStatus[] = [];
   private readonly maxHistorySize = 100;
 
   constructor() {
+    super();
     loggers.monitoring.info('Blockscout monitoring service initialized');
+  }
+
+  /**
+   * Emit a transaction event
+   * @private
+   */
+  private emitTransactionEvent(type: TransactionEventType, transaction: TransactionStatus): void {
+    const event: TransactionEvent = {
+      type,
+      transaction,
+      timestamp: Date.now(),
+    };
+
+    this.emit(type, event);
+    this.emit('transaction:updated', event);
+
+    loggers.monitoring.debug({ type, hash: transaction.hash }, 'Transaction event emitted');
   }
 
   /**
@@ -57,6 +97,10 @@ export class BlockscoutMonitoringService {
 
     this.pendingTransactions.set(hash, transaction);
     loggers.monitoring.info({ hash, chainId }, `Tracking transaction ${hash} on chain ${chainId}`);
+
+    // Emit events
+    this.emitTransactionEvent('transaction:tracked', transaction);
+    this.emitTransactionEvent('transaction:pending', transaction);
   }
 
   /**
@@ -68,7 +112,8 @@ export class BlockscoutMonitoringService {
     const transaction = this.pendingTransactions.get(hash);
 
     if (transaction) {
-      transaction.status = receipt.status === 'success' ? 'confirmed' : 'failed';
+      const newStatus = receipt.status === 'success' ? 'confirmed' : 'failed';
+      transaction.status = newStatus;
       transaction.blockNumber = Number(receipt.blockNumber);
       transaction.gasUsed = receipt.gasUsed;
 
@@ -89,6 +134,13 @@ export class BlockscoutMonitoringService {
         },
         `Transaction ${hash} ${transaction.status}`
       );
+
+      // Emit status-specific event
+      if (newStatus === 'confirmed') {
+        this.emitTransactionEvent('transaction:confirmed', transaction);
+      } else {
+        this.emitTransactionEvent('transaction:failed', transaction);
+      }
     }
   }
 

@@ -29,6 +29,14 @@ const config: HardhatUserConfig = {
       chainId: 1337,
       type: "edr-simulated" as const
     },
+    "base-sepolia": {
+      type: "http" as const,
+      url: process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      chainId: 84532,
+      gasPrice: 1000000000, // 1 gwei
+      timeout: 60000
+    },
     "arbitrum-sepolia": {
       type: "http" as const,
       url: process.env.ARBITRUM_SEPOLIA_RPC || "https://sepolia-rollup.arbitrum.io/rpc",
@@ -51,9 +59,20 @@ const config: HardhatUserConfig = {
   },
   etherscan: {
     apiKey: {
+      "base-sepolia": process.env.BASESCAN_API_KEY || "",
       arbitrumSepolia: process.env.ARBISCAN_API_KEY || "",
       mainnet: process.env.ETHERSCAN_API_KEY || ""
-    }
+    },
+    customChains: [
+      {
+        network: "base-sepolia",
+        chainId: 84532,
+        urls: {
+          apiURL: "https://api-sepolia.basescan.org/api",
+          browserURL: "https://sepolia.basescan.org"
+        }
+      }
+    ]
   },
   paths: {
     sources: "./contracts",

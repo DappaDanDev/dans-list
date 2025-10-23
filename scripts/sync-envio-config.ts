@@ -18,30 +18,41 @@ interface DeploymentInfo {
  * Sync Envio configuration with deployed contract addresses
  * This script reads the deployed addresses from Hardhat Ignition and
  * generates the Envio config with real addresses
+ *
+ * Usage:
+ *   tsx scripts/sync-envio-config.ts
+ *   tsx scripts/sync-envio-config.ts --address 0x1234...
  */
-async function syncEnvioConfig() {
+async function syncEnvioConfig(cliAddress?: string) {
   const logger = loggers.envio;
 
   logger.info('Starting Envio configuration sync');
 
   try {
-    // Check if local deployment exists
-    const deploymentPath = path.join(__dirname, '../ignition/deployments/local/deployed_addresses.json');
-
     let deploymentInfo: DeploymentInfo = {};
 
-    if (fs.existsSync(deploymentPath)) {
-      logger.info('Found local deployment file');
-      const deploymentData = fs.readFileSync(deploymentPath, 'utf8');
-      deploymentInfo = JSON.parse(deploymentData);
-      logger.info({ addresses: deploymentInfo }, 'Loaded deployment addresses');
+    // Check if address was provided via CLI
+    if (cliAddress) {
+      logger.info({ address: cliAddress }, 'Using CLI-provided address');
+      deploymentInfo.marketplace = cliAddress;
     } else {
-      logger.error('No deployment found. Please deploy contracts first.');
-      throw new Error(
-        'Cannot sync Envio configuration without deployed contracts.\n' +
-        'Please run: npx hardhat ignition deploy ./ignition/modules/Marketplace.ts --network local\n' +
-        'This script requires real deployed contract addresses.'
-      );
+      // Check if local deployment exists
+      const deploymentPath = path.join(__dirname, '../ignition/deployments/local/deployed_addresses.json');
+
+      if (fs.existsSync(deploymentPath)) {
+        logger.info('Found local deployment file');
+        const deploymentData = fs.readFileSync(deploymentPath, 'utf8');
+        deploymentInfo = JSON.parse(deploymentData);
+        logger.info({ addresses: deploymentInfo }, 'Loaded deployment addresses');
+      } else {
+        logger.error('No deployment found. Please deploy contracts first or provide --address.');
+        throw new Error(
+          'Cannot sync Envio configuration without deployed contracts.\n' +
+          'Options:\n' +
+          '  1. Provide address: tsx scripts/sync-envio-config.ts --address 0x...\n' +
+          '  2. Deploy locally: npx hardhat ignition deploy ./ignition/modules/VerifiableMarketplace.ts --network local'
+        );
+      }
     }
 
     // Read ABI files
@@ -81,19 +92,21 @@ networks:
         handler: ./src/EventHandlers.ts
         events:
           - event: ListingCreated
-          - event: PurchaseInitiated
-          - event: AgentRegistered
-  - id: 421614  # Arbitrum Sepolia
+          - event: ListingPurchased
+          - event: MarketplaceFeeUpdated
+          - event: FundsWithdrawn
+  - id: 84532  # Base Sepolia
     start_block: 0
     contracts:
       - name: VerifiableMarketplace
-        address: "\${MARKETPLACE_ADDRESS_ARBITRUM_SEPOLIA}"
+        address: "\${MARKETPLACE_ADDRESS_BASE_SEPOLIA}"
         abi_file_path: ${marketplaceAbiFile}
         handler: ./src/EventHandlers.ts
         events:
           - event: ListingCreated
-          - event: PurchaseInitiated
-          - event: AgentRegistered
+          - event: ListingPurchased
+          - event: MarketplaceFeeUpdated
+          - event: FundsWithdrawn
 
 # GraphQL schema location
 schema_path: ./schema.graphql
@@ -107,7 +120,7 @@ handler_path: ./src/EventHandlers.ts
     fs.writeFileSync(configPath, envioConfig);
     logger.info({ path: configPath }, 'Generated Envio configuration');
 
-    // Generate GraphQL schema (no aiProofHash references)
+    // Generate GraphQL schema - matches actual contract events
     const graphqlSchema = `type Agent @entity {
   id: ID!
   walletAddress: String!
@@ -126,6 +139,7 @@ type MarketMetrics @entity {
   activeAgents24h: Int!
   averagePrice: BigInt!
   totalTransactions: Int!
+  marketplaceFee: Int!
   lastUpdated: BigInt!
 }
 
@@ -154,10 +168,20 @@ type PurchaseEvent @entity {
   blockNumber: BigInt!
 }
 
-type AgentRegistration @entity {
+type MarketplaceFeeEvent @entity {
   id: ID!
-  agentId: String!
-  walletAddress: String!
+  oldFee: Int!
+  newFee: Int!
+  timestamp: BigInt!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: BigInt!
+}
+
+type FundsWithdrawnEvent @entity {
+  id: ID!
+  recipient: String!
+  amount: BigInt!
   timestamp: BigInt!
   chainId: Int!
   transactionHash: String!
@@ -186,7 +210,14 @@ type AgentRegistration @entity {
 
 // Run if called directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  syncEnvioConfig()
+  // Parse CLI arguments
+  const args = process.argv.slice(2);
+  const addressIndex = args.indexOf('--address');
+  const cliAddress = addressIndex !== -1 && args[addressIndex + 1]
+    ? args[addressIndex + 1]
+    : undefined;
+
+  syncEnvioConfig(cliAddress)
     .then(result => {
       console.log('Sync completed:', result);
       process.exit(0);

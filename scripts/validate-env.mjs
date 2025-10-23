@@ -20,7 +20,8 @@ const colors = {
 // Define required environment variables
 const requiredEnvVars = {
   development: [
-    // No strict requirements for development
+    'DATABASE_URL',
+    'OPENAI_API_KEY', // Required for embeddings in Phase 3
   ],
   production: [
     'OPENAI_API_KEY',
@@ -28,6 +29,8 @@ const requiredEnvVars = {
     'BASE_SEPOLIA_RPC',
     'PRIVATE_KEY',
     'ENVIO_API_KEY',
+    'VINCENT_LIT_NETWORK', // Required for Vincent wallets in production
+    'NEXUS_NETWORK', // Required for Nexus payments in production
   ],
 };
 
@@ -97,6 +100,21 @@ function validateEnvironment() {
   }
 
   console.log(`\n${colors.green}✅ Environment validation passed!${colors.reset}\n`);
+
+  // Phase 3 specific warnings
+  if (!process.env.MARKETPLACE_ADDRESS) {
+    console.log(`${colors.yellow}ℹ️  MARKETPLACE_ADDRESS not set - Envio indexing will need this${colors.reset}`);
+  }
+
+  // Phase 4 specific warnings (development only)
+  if (env === 'development') {
+    if (!process.env.VINCENT_LIT_NETWORK) {
+      console.warn(`${colors.yellow}⚠️  VINCENT_LIT_NETWORK not set - Vincent wallet features will not work${colors.reset}`);
+    }
+    if (!process.env.NEXUS_NETWORK) {
+      console.warn(`${colors.yellow}⚠️  NEXUS_NETWORK not set - Nexus payment features will not work${colors.reset}`);
+    }
+  }
 
   // Additional checks for production
   if (env === 'production') {
