@@ -1,5 +1,14 @@
-import { HyperSyncClient } from '@envio-dev/hypersync-client';
 import { loggers, logUtils } from '../utils/logger';
+import { executeQuery } from '../graphql/client';
+import {
+  TOP_AGENTS_QUERY,
+  RECENT_TRANSACTIONS_QUERY,
+  MARKET_METRICS_QUERY,
+  type Agent,
+  type ListingEvent,
+  type PurchaseEvent,
+  type MarketMetrics,
+} from '../graphql/queries';
 import type { TransactionStatus } from '../monitoring/blockscout.service';
 
 const logger = loggers.envio;
@@ -51,25 +60,18 @@ export interface MarketTrends {
 
 /**
  * HyperSync Analytics Service for ultra-fast blockchain data indexing
+ * Uses Envio GraphQL API for querying indexed blockchain data
  */
 export class MarketAnalyticsService {
-  private client: HyperSyncClient;
   private readonly MARKETPLACE_ADDRESS: string;
   private readonly SUPPORTED_CHAINS = [31337, 421614, 42161, 137, 8453]; // Local, Arbitrum Sepolia, Arbitrum One, Polygon, Base
 
   constructor() {
-    const apiKey = process.env.ENVIO_API_KEY || '';
-
-    this.client = new HyperSyncClient({
-      apiKey,
-    });
-
     // Get marketplace address from environment or use placeholder
     this.MARKETPLACE_ADDRESS = process.env.MARKETPLACE_ADDRESS || '0x0000000000000000000000000000000000000001';
 
     logger.info(
       {
-        apiKey: apiKey ? 'configured' : 'missing',
         marketplace: this.MARKETPLACE_ADDRESS,
         chains: this.SUPPORTED_CHAINS
       },
@@ -85,26 +87,77 @@ export class MarketAnalyticsService {
     logger.info({ agentAddress }, 'Fetching agent performance');
 
     try {
-      const queries = this.SUPPORTED_CHAINS.map(chainId =>
-        this.queryChain(chainId, {
-          fromAddress: agentAddress,
-          toAddress: this.MARKETPLACE_ADDRESS,
-        })
+      // Query for agent's selling activity (listings)
+      const listingsResult = await executeQuery<{ listingEvents: ListingEvent[] }>(
+        `query AgentListings($seller: String!) {
+          listingEvents(where: { seller: $seller }, first: 1000) {
+            id
+            chainId
+            price
+            timestamp
+          }
+        }`,
+        { seller: agentAddress }
       );
 
-      const results = await Promise.all(queries);
+      // Query for agent's buying activity (purchases)
+      const purchasesResult = await executeQuery<{ purchaseEvents: PurchaseEvent[] }>(
+        `query AgentPurchases($buyer: String!) {
+          purchaseEvents(where: { buyer: $buyer }, first: 1000) {
+            id
+            chainId
+            amount
+            timestamp
+          }
+        }`,
+        { buyer: agentAddress }
+      );
 
-      // Aggregate cross-chain data
+      const listings = listingsResult.listingEvents || [];
+      const purchases = purchasesResult.purchaseEvents || [];
+
+      // Aggregate chain data
+      const chainData = new Map<number, { transactions: number; volume: bigint }>();
+
+      for (const listing of listings) {
+        const data = chainData.get(listing.chainId) || { transactions: 0, volume: 0n };
+        data.transactions++;
+        data.volume += BigInt(listing.price);
+        chainData.set(listing.chainId, data);
+      }
+
+      for (const purchase of purchases) {
+        const data = chainData.get(purchase.chainId) || { transactions: 0, volume: 0n };
+        data.transactions++;
+        data.volume += BigInt(purchase.amount);
+        chainData.set(purchase.chainId, data);
+      }
+
+      // Calculate totals
+      const totalTransactions = listings.length + purchases.length;
+      const totalVolume = Array.from(chainData.values()).reduce(
+        (sum, data) => sum + data.volume,
+        0n
+      );
+
+      // Generate activity timeline
+      const allEvents = [
+        ...listings.map(l => ({ timestamp: l.timestamp, volume: BigInt(l.price) })),
+        ...purchases.map(p => ({ timestamp: p.timestamp, volume: BigInt(p.amount) })),
+      ].sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+
+      const timeline = this.generateActivityTimeline(allEvents);
+
       const performance: AgentPerformance = {
         agentAddress,
-        totalTransactions: results.reduce((sum, r) => sum + (r?.transactions?.length || 0), 0),
-        totalVolume: results.reduce((sum, r) => sum + this.calculateVolume(r), 0n),
-        chainBreakdown: results.map((r, i) => ({
-          chainId: this.SUPPORTED_CHAINS[i]!,
-          transactions: r?.transactions?.length || 0,
-          volume: this.calculateVolume(r),
+        totalTransactions,
+        totalVolume,
+        chainBreakdown: Array.from(chainData.entries()).map(([chainId, data]) => ({
+          chainId,
+          transactions: data.transactions,
+          volume: data.volume,
         })),
-        timeline: this.generateActivityTimeline(results),
+        timeline,
       };
 
       const duration = Date.now() - startTime;
@@ -123,25 +176,101 @@ export class MarketAnalyticsService {
   async streamMarketEvents(callback: (event: MarketEvent) => void): Promise<() => void> {
     logger.info('Starting market event stream');
 
-    const eventSignatures = [
-      'ListingCreated(string,address,uint256,bytes32)',
-      'ListingPurchased(string,address,address,uint256)',
-      'MarketplaceFeeUpdated(uint256,uint256)',
-    ];
+    let isActive = true;
+    let lastBlockNumber = 0n;
 
-    try {
-      // Note: HyperSync client streaming would be configured here
-      // For now, returning a mock unsubscribe function
-      logger.warn('HyperSync streaming not fully configured - using mock stream');
+    const pollForEvents = async () => {
+      try {
+        // Query for new listing events
+        const listingsResult = await executeQuery<{ listingEvents: ListingEvent[] }>(
+          `query RecentListings($minBlock: BigInt!) {
+            listingEvents(
+              where: { blockNumber_gt: $minBlock }
+              orderBy: "blockNumber"
+              first: 100
+            ) {
+              listingId
+              seller
+              price
+              blockNumber
+              transactionHash
+              timestamp
+              chainId
+            }
+          }`,
+          { minBlock: lastBlockNumber.toString() }
+        );
 
-      // Return unsubscribe function
-      return () => {
-        logger.info('Stopping market event stream');
-      };
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to start market event stream');
-      throw error;
-    }
+        // Query for new purchase events
+        const purchasesResult = await executeQuery<{ purchaseEvents: PurchaseEvent[] }>(
+          `query RecentPurchases($minBlock: BigInt!) {
+            purchaseEvents(
+              where: { blockNumber_gt: $minBlock }
+              orderBy: "blockNumber"
+              first: 100
+            ) {
+              listingId
+              buyer
+              seller
+              amount
+              blockNumber
+              transactionHash
+              timestamp
+              chainId
+            }
+          }`,
+          { minBlock: lastBlockNumber.toString() }
+        );
+
+        // Convert to MarketEvent format and call callback
+        for (const listing of listingsResult.listingEvents || []) {
+          callback({
+            type: 'ListingCreated',
+            listingId: listing.listingId,
+            seller: listing.seller,
+            price: BigInt(listing.price),
+            blockNumber: BigInt(listing.blockNumber),
+            transactionHash: listing.transactionHash,
+            timestamp: Number(listing.timestamp),
+            chainId: listing.chainId,
+          });
+
+          lastBlockNumber = BigInt(listing.blockNumber);
+        }
+
+        for (const purchase of purchasesResult.purchaseEvents || []) {
+          callback({
+            type: 'ListingPurchased',
+            listingId: purchase.listingId,
+            seller: purchase.seller,
+            buyer: purchase.buyer,
+            price: BigInt(purchase.amount),
+            blockNumber: BigInt(purchase.blockNumber),
+            transactionHash: purchase.transactionHash,
+            timestamp: Number(purchase.timestamp),
+            chainId: purchase.chainId,
+          });
+
+          lastBlockNumber = BigInt(purchase.blockNumber);
+        }
+      } catch (error) {
+        logger.error({ err: error }, 'Failed to poll for events');
+      }
+
+      // Continue polling if active
+      if (isActive) {
+        setTimeout(pollForEvents, 5000); // Poll every 5 seconds
+      }
+    };
+
+    // Start polling
+    pollForEvents();
+
+    // Return unsubscribe function
+    return () => {
+      isActive = false;
+      logger.info('Stopping market event stream');
+    };
   }
 
   /**
@@ -152,14 +281,68 @@ export class MarketAnalyticsService {
     logger.info({ timeRange }, 'Analyzing market trends');
 
     try {
-      // Query would be implemented here with HyperSync
-      // For now, returning mock data structure
+      const fromTimestamp = Math.floor(timeRange.from.getTime() / 1000);
+      const toTimestamp = Math.floor(timeRange.to.getTime() / 1000);
+
+      // Query for all events in time range
+      const result = await executeQuery<{
+        listingEvents: ListingEvent[];
+        purchaseEvents: PurchaseEvent[];
+        marketMetrics: MarketMetrics | null;
+      }>(
+        `query MarketTrends($from: BigInt!, $to: BigInt!) {
+          listingEvents(where: { timestamp_gte: $from, timestamp_lte: $to }) {
+            price
+            timestamp
+          }
+          purchaseEvents(where: { timestamp_gte: $from, timestamp_lte: $to }) {
+            amount
+            timestamp
+          }
+          marketMetrics(id: "global") {
+            totalVolume
+            totalTransactions
+            averagePrice
+          }
+        }`,
+        { from: fromTimestamp.toString(), to: toTimestamp.toString() }
+      );
+
+      const listings = result.listingEvents || [];
+      const purchases = result.purchaseEvents || [];
+
+      // Calculate volume and trends
+      const totalVolume =
+        listings.reduce((sum, l) => sum + BigInt(l.price), 0n) +
+        purchases.reduce((sum, p) => sum + BigInt(p.amount), 0n);
+
+      const totalTransactions = listings.length + purchases.length;
+
+      const averagePrice = totalTransactions > 0 ? totalVolume / BigInt(totalTransactions) : 0n;
+
+      // Group by hour for hourly volume
+      const hourlyData = new Map<string, bigint>();
+
+      for (const listing of listings) {
+        const hour = new Date(Number(listing.timestamp) * 1000).toISOString().slice(0, 13);
+        hourlyData.set(hour, (hourlyData.get(hour) || 0n) + BigInt(listing.price));
+      }
+
+      for (const purchase of purchases) {
+        const hour = new Date(Number(purchase.timestamp) * 1000).toISOString().slice(0, 13);
+        hourlyData.set(hour, (hourlyData.get(hour) || 0n) + BigInt(purchase.amount));
+      }
+
+      const hourlyVolume = Array.from(hourlyData.entries())
+        .map(([hour, volume]) => ({ hour, volume }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+
       const trends: MarketTrends = {
-        totalVolume: 0n,
-        totalTransactions: 0,
-        averagePrice: 0n,
-        topCategories: [],
-        hourlyVolume: [],
+        totalVolume,
+        totalTransactions,
+        averagePrice,
+        topCategories: [], // Would need category data in GraphQL schema
+        hourlyVolume,
       };
 
       const duration = Date.now() - startTime;
@@ -179,9 +362,46 @@ export class MarketAnalyticsService {
     logger.debug({ limit }, 'Fetching recent market activity');
 
     try {
-      // Implementation would query recent blocks
-      // For now, returning empty array
-      return [];
+      const result = await executeQuery<{
+        listingEvents: ListingEvent[];
+        purchaseEvents: PurchaseEvent[];
+      }>(RECENT_TRANSACTIONS_QUERY, { first: limit });
+
+      const events: MarketEvent[] = [];
+
+      // Add listing events
+      for (const listing of result.listingEvents || []) {
+        events.push({
+          type: 'ListingCreated',
+          listingId: listing.listingId,
+          seller: listing.seller,
+          price: BigInt(listing.price),
+          blockNumber: BigInt(listing.blockNumber),
+          transactionHash: listing.transactionHash,
+          timestamp: Number(listing.timestamp),
+          chainId: listing.chainId,
+        });
+      }
+
+      // Add purchase events
+      for (const purchase of result.purchaseEvents || []) {
+        events.push({
+          type: 'ListingPurchased',
+          listingId: purchase.listingId,
+          buyer: purchase.buyer,
+          seller: purchase.seller,
+          price: BigInt(purchase.amount),
+          blockNumber: BigInt(purchase.blockNumber),
+          transactionHash: purchase.transactionHash,
+          timestamp: Number(purchase.timestamp),
+          chainId: purchase.chainId,
+        });
+      }
+
+      // Sort by timestamp descending
+      events.sort((a, b) => b.timestamp - a.timestamp);
+
+      return events.slice(0, limit);
     } catch (error) {
       logger.error({ err: error }, 'Failed to fetch recent activity');
       throw error;
@@ -214,33 +434,27 @@ export class MarketAnalyticsService {
   /**
    * Private helper methods
    */
-  private async queryChain(chainId: number, filters: any): Promise<any> {
-    try {
-      // Actual HyperSync query would be implemented here
-      logger.debug({ chainId, filters }, 'Querying chain');
-      return { transactions: [], logs: [] };
-    } catch (error) {
-      logger.error({ err: error, chainId }, 'Chain query failed');
-      return { transactions: [], logs: [] };
+  private generateActivityTimeline(
+    events: Array<{ timestamp: string; volume: bigint }>
+  ): Array<{ date: string; transactions: number; volume: bigint }> {
+    // Group events by date
+    const dailyData = new Map<string, { transactions: number; volume: bigint }>();
+
+    for (const event of events) {
+      const date = new Date(Number(event.timestamp) * 1000).toISOString().slice(0, 10);
+      const existing = dailyData.get(date) || { transactions: 0, volume: 0n };
+      existing.transactions++;
+      existing.volume += event.volume;
+      dailyData.set(date, existing);
     }
-  }
 
-  private calculateVolume(result: any): bigint {
-    if (!result?.transactions) return 0n;
-    return result.transactions.reduce((sum: bigint, tx: any) => {
-      return sum + BigInt(tx.value || 0);
-    }, 0n);
-  }
-
-  private generateActivityTimeline(results: any[]): any[] {
-    // Generate timeline from results
-    return [];
-  }
-
-  private async getBlockByTimestamp(timestamp: Date): Promise<bigint> {
-    // Convert timestamp to block number
-    // This would use HyperSync's timestamp indexing
-    return 0n;
+    return Array.from(dailyData.entries())
+      .map(([date, data]) => ({
+        date,
+        transactions: data.transactions,
+        volume: data.volume,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
   }
 }
 

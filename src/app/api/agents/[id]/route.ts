@@ -6,9 +6,9 @@ const logger = loggers.api;
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const agentId = params.id;
+  const { id: agentId } = await params;
 
   logger.info({ agentId }, 'Fetching agent data');
 

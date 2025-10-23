@@ -509,13 +509,25 @@ Create `src/lib/vincent/wallet.service.ts` to manage PKP wallet lifecycle using 
 - [ ] Extend `src/lib/monitoring/__tests__/blockscout.service.test.ts` to cover Nexus webhook updates and history pagination.
 - [ ] Capture integration notes and screenshots in `docs/monitoring.md` once UI is complete.
 
-## Phase 5: Integration and Testing (Day 4 - 8 hours)
+## Phase 5: Frontend Integration and Testing (Day 4 - 8 hours)
 
 _Goal: deliver a shippable marketplace experience with real data, resilient error handling, and comprehensive test coverage._
 
-### Task 5.0: Marketplace Shell & Navigation (1 hour)
+### ✅ Completed Phase 4 Backend Foundation
+- [x] Created `VincentConnect.tsx` - JWT authentication component with OAuth flow
+- [x] Created `AgentPurchasePanel.tsx` - Complete purchase UI with real-time status
+- [x] Created `/api/vincent/auth/verify` - JWT verification and storage endpoint
+- [x] Created `/api/agents/purchase` - Purchase execution endpoint
+- [x] All backend services tested (53 tests passing)
+- [x] Zero linting errors in new components
+
+### Task 5.0: Marketplace Shell & Navigation (1 hour) 🚨 **IN PROGRESS**
+
+**Issue**: Frontend currently shows component library showcase instead of marketplace interface
 
 - [ ] Replace the component showcase in `src/app/page.tsx` with a full marketplace layout (hero, CTA, live metrics, featured listings).
+- [ ] Create listing creation page at `src/app/listings/create/page.tsx` integrating `AgentPurchasePanel`
+- [ ] Create listing detail page at `src/app/listings/[id]/page.tsx` with purchase flow
 - [ ] Add navigation in `src/app/layout.tsx` linking Upload Listing, Agent Insights, Market Activity, and Transaction History.
 - [ ] Ensure global styles in `src/app/globals.css` support dark/light themes per PRD visuals.
 
